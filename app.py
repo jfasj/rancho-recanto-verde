@@ -3,6 +3,11 @@ import os
 import sqlite3
 import hashlib
 import xml.etree.ElementTree as ET
+
+try:
+    from twilio.rest import Client
+except Exception:
+    Client = None
 from datetime import datetime, date, timedelta
 from urllib.parse import quote
 from io import BytesIO
@@ -136,14 +141,14 @@ for col in [
 
 for col in [
     "funcionario", "telefone", "tipo_alerta", "mensagem", "data_envio",
-    "status", "obs"
+    "status", "sid_twilio", "erro_twilio", "obs"
 ]:
     add_col("alertas_whatsapp", col)
 
 for col in [
     "animal", "tipo_animal", "medicamento", "dosagem", "data_hora",
     "funcionario", "telefone", "mensagem", "status", "alerta_gerado",
-    "data_alerta", "obs"
+    "data_alerta", "sid_twilio", "erro_twilio", "obs"
 ]:
     add_col("medicacoes_agendadas", col)
 
@@ -798,6 +803,82 @@ def ler_xml_nfe(xml_bytes):
         "cnpj_fornecedor": cnpj,
         "produtos": produtos,
     }
+
+
+
+# =========================================================
+# TWILIO / WHATSAPP PROFISSIONAL
+# =========================================================
+
+def get_secret_value(nome, padrao=""):
+    try:
+        if nome in st.secrets:
+            return st.secrets[nome]
+    except Exception:
+        pass
+    return os.environ.get(nome, padrao)
+
+
+def twilio_configurado():
+    sid = get_secret_value("TWILIO_ACCOUNT_SID")
+    token = get_secret_value("TWILIO_AUTH_TOKEN")
+    from_number = get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+    return bool(sid and token and from_number and Client is not None)
+
+
+def normalizar_whatsapp(numero):
+    numero = str(numero or "")
+    numero = numero.replace("+", "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if numero and not numero.startswith("55"):
+        numero = "55" + numero
+    return numero
+
+
+def enviar_whatsapp_twilio(numero, mensagem):
+    if Client is None:
+        return False, "", "Biblioteca twilio não instalada. Inclua twilio no requirements.txt."
+
+    sid = get_secret_value("TWILIO_ACCOUNT_SID")
+    token = get_secret_value("TWILIO_AUTH_TOKEN")
+    from_number = get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+
+    if not sid or not token:
+        return False, "", "Credenciais Twilio não configuradas."
+
+    numero = normalizar_whatsapp(numero)
+    if not numero:
+        return False, "", "Telefone do funcionário não informado."
+
+    try:
+        client = Client(sid, token)
+        msg = client.messages.create(
+            body=str(mensagem),
+            from_=from_number,
+            to=f"whatsapp:+{numero}"
+        )
+        return True, msg.sid, ""
+    except Exception as e:
+        return False, "", str(e)
+
+
+def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, status, sid_twilio="", erro_twilio="", obs=""):
+    c.execute("""
+        INSERT INTO alertas_whatsapp
+        (funcionario, telefone, tipo_alerta, mensagem, data_envio, status, sid_twilio, erro_twilio, obs)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        funcionario,
+        telefone,
+        tipo_alerta,
+        mensagem,
+        datetime.now().strftime("%d/%m/%Y %H:%M"),
+        status,
+        sid_twilio,
+        erro_twilio,
+        obs
+    ))
+    conn.commit()
+
 
 
 # =========================================================
@@ -2482,32 +2563,49 @@ elif op == "Funcionários":
                         st.error("Marque a confirmação para excluir.")
 
 
+
 # =========================================================
 # ALERTAS WHATSAPP
 # =========================================================
 
 elif op == "Alertas WhatsApp":
-    titulo_pagina("📲 Alertas WhatsApp", "Alertas para funcionários e lembretes de medicação")
+    titulo_pagina("📲 Alertas WhatsApp", "Envio profissional via Twilio e alternativa pelo WhatsApp Web")
 
     funcionarios = pd.read_sql_query(
         "SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != '' AND status = 'Ativo'",
         conn
     )
 
-    animais = listar_animais()
-    farmacia = listar_farmacia()
+    if twilio_configurado():
+        st.success("Twilio configurado. Envio real pelo WhatsApp habilitado.")
+    else:
+        st.warning("Twilio ainda não configurado. O botão de envio pelo Twilio ficará indisponível.")
+        st.caption("Configure em Manage app > Settings > Secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_WHATSAPP_FROM.")
 
     aba = st.radio(
         "Opção",
-        ["Agendar Medicação", "Alertas de Medicação 1h Antes", "Enviar Alerta Manual", "Histórico de Alertas"],
+        ["Agendar Medicação", "Alertas de Medicação 1h Antes", "Enviar Alerta Manual", "Histórico de Alertas", "Configuração Twilio"],
         horizontal=True
     )
 
-    # -----------------------------------------------------
-    # AGENDAR MEDICAÇÃO
-    # -----------------------------------------------------
-    if aba == "Agendar Medicação":
+    if aba == "Configuração Twilio":
+        st.markdown("### Configuração Twilio")
+        st.info("No Streamlit Cloud, vá em Manage app > Settings > Secrets e cadastre as variáveis abaixo.")
+        st.code("""
+TWILIO_ACCOUNT_SID = "cole_seu_account_sid"
+TWILIO_AUTH_TOKEN = "cole_seu_auth_token"
+TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"
+""")
+        st.markdown("### Status atual")
+        st.write("Twilio instalado:", "Sim" if Client is not None else "Não")
+        st.write("Credenciais configuradas:", "Sim" if twilio_configurado() else "Não")
+        st.write("Número de origem:", get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886"))
+        st.caption("No Sandbox, cada funcionário precisa enviar o código join para o número da Twilio antes de receber mensagens.")
+
+    elif aba == "Agendar Medicação":
         st.markdown("### Agendar medicação com alerta 1 hora antes")
+        animais = listar_animais()
+        farmacia = listar_farmacia()
 
         if funcionarios.empty:
             st.warning("Cadastre funcionários ativos primeiro.")
@@ -2542,9 +2640,9 @@ elif op == "Alertas WhatsApp":
 
             data_hora = datetime.combine(data_aplicacao, hora_aplicacao)
 
-            mensagem_padrao = (
+            mensagem = (
                 f"Olá, {funcionario_nome}!\\n\\n"
-                f"Lembrete de medicação do Rancho Recanto Verde.\\n"
+                f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
                 f"Animal: {animal_nome}\\n"
                 f"Medicamento: {medicamento}\\n"
                 f"Dosagem/orientação: {dosagem}\\n"
@@ -2552,64 +2650,39 @@ elif op == "Alertas WhatsApp":
                 f"Favor confirmar a aplicação no sistema."
             )
 
-            mensagem = st.text_area("Mensagem do WhatsApp", value=mensagem_padrao, height=180)
+            mensagem = st.text_area("Mensagem do WhatsApp", value=mensagem, height=180)
 
             if st.button("Salvar Agendamento"):
                 c.execute("""
                     INSERT INTO medicacoes_agendadas
                     (animal, tipo_animal, medicamento, dosagem, data_hora,
                      funcionario, telefone, mensagem, status, alerta_gerado,
-                     data_alerta, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     data_alerta, sid_twilio, erro_twilio, obs)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    animal_nome,
-                    tipo_animal,
-                    medicamento,
-                    dosagem,
+                    animal_nome, tipo_animal, medicamento, dosagem,
                     data_hora.strftime("%d/%m/%Y %H:%M"),
-                    funcionario_nome,
-                    telefone,
-                    mensagem,
-                    "Agendada",
-                    "Não",
-                    "",
-                    obs
+                    funcionario_nome, telefone, mensagem,
+                    "Agendada", "Não", "", "", "", obs
                 ))
                 conn.commit()
                 st.success("Medicação agendada com sucesso!")
 
-    # -----------------------------------------------------
-    # ALERTAS DE MEDICAÇÃO 1H ANTES
-    # -----------------------------------------------------
     elif aba == "Alertas de Medicação 1h Antes":
-        st.markdown("### Medicações para alertar")
-
-        df = pd.read_sql_query(
-            "SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada'",
-            conn
-        )
+        st.markdown("### Medicações dentro da janela de 1 hora")
+        df = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada'", conn)
 
         if df.empty:
             st.info("Nenhuma medicação agendada.")
         else:
-            agora = datetime.now()
-            limite = agora + timedelta(hours=1)
-
-            df["data_hora_dt"] = pd.to_datetime(
-                df["data_hora"],
-                format="%d/%m/%Y %H:%M",
-                errors="coerce"
-            )
-
-            alertas = df[
-                (df["data_hora_dt"].notna()) &
-                (df["data_hora_dt"] <= limite)
-            ].copy()
+            limite = datetime.now() + timedelta(hours=1)
+            df["data_hora_dt"] = pd.to_datetime(df["data_hora"], format="%d/%m/%Y %H:%M", errors="coerce")
+            alertas = df[(df["data_hora_dt"].notna()) & (df["data_hora_dt"] <= limite)].copy()
 
             if alertas.empty:
                 st.success("Nenhuma medicação dentro da janela de 1 hora.")
             else:
-                st.warning("⚠️ Existem medicações para enviar alerta ao funcionário.")
+                st.warning("⚠️ Existem medicações para enviar alerta.")
 
                 for _, row in alertas.iterrows():
                     st.markdown("---")
@@ -2622,52 +2695,47 @@ elif op == "Alertas WhatsApp":
                         st.write(f"**Data/Hora:** {row['data_hora']}")
                         st.write(f"**Funcionário:** {row['funcionario']}")
                         st.write(f"**Telefone:** {row['telefone']}")
+                        if str(row.get("sid_twilio", "") or ""):
+                            st.success(f"Twilio SID: {row.get('sid_twilio', '')}")
+                        if str(row.get("erro_twilio", "") or ""):
+                            st.error(f"Erro Twilio: {row.get('erro_twilio', '')}")
 
                     with col2:
-                        numero = str(row["telefone"] or "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-                        if numero and not numero.startswith("55"):
-                            numero = "55" + numero
+                        numero = normalizar_whatsapp(row["telefone"])
+                        link = f"https://wa.me/{numero}?text={quote(str(row['mensagem'] or ''))}"
+                        st.link_button("📲 Abrir WhatsApp", link, use_container_width=True)
 
-                        texto = quote(str(row["mensagem"] or ""))
-                        link = f"https://wa.me/{numero}?text={texto}"
+                        if st.button("🚀 Enviar via Twilio", key=f"twilio_{row['id']}", use_container_width=True, disabled=not twilio_configurado()):
+                            ok, sid, erro = enviar_whatsapp_twilio(row["telefone"], row["mensagem"])
 
-                        st.link_button("📲 Enviar WhatsApp", link, use_container_width=True)
+                            if ok:
+                                c.execute("""
+                                    UPDATE medicacoes_agendadas
+                                    SET alerta_gerado = ?, data_alerta = ?, sid_twilio = ?, erro_twilio = ?
+                                    WHERE id = ?
+                                """, ("Sim", datetime.now().strftime("%d/%m/%Y %H:%M"), sid, "", str(row["id"])))
 
-                        if st.button("Marcar alerta como enviado", key=f"enviado_{row['id']}", use_container_width=True):
-                            c.execute("""
-                                UPDATE medicacoes_agendadas
-                                SET alerta_gerado = ?, data_alerta = ?
-                                WHERE id = ?
-                            """, (
-                                "Sim",
-                                datetime.now().strftime("%d/%m/%Y %H:%M"),
-                                str(row["id"])
-                            ))
-
-                            c.execute("""
-                                INSERT INTO alertas_whatsapp
-                                (funcionario, telefone, tipo_alerta, mensagem, data_envio, status, obs)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                row["funcionario"],
-                                row["telefone"],
-                                "Medicação 1h antes",
-                                row["mensagem"],
-                                datetime.now().strftime("%d/%m/%Y %H:%M"),
-                                "Gerado",
-                                f"Animal: {row['animal']} | Medicamento: {row['medicamento']}"
-                            ))
-
-                            conn.commit()
-                            st.success("Alerta registrado como enviado.")
-                            st.rerun()
+                                registrar_alerta_whatsapp(
+                                    row["funcionario"], row["telefone"], "Medicação 1h antes",
+                                    row["mensagem"], "Enviado via Twilio",
+                                    sid_twilio=sid,
+                                    obs=f"Animal: {row['animal']} | Medicamento: {row['medicamento']}"
+                                )
+                                st.success("Mensagem enviada pelo Twilio!")
+                                st.rerun()
+                            else:
+                                c.execute("UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = ?", (erro, str(row["id"])))
+                                conn.commit()
+                                registrar_alerta_whatsapp(
+                                    row["funcionario"], row["telefone"], "Medicação 1h antes",
+                                    row["mensagem"], "Erro Twilio",
+                                    erro_twilio=erro,
+                                    obs=f"Animal: {row['animal']} | Medicamento: {row['medicamento']}"
+                                )
+                                st.error(f"Erro ao enviar: {erro}")
 
                         if st.button("Marcar medicação como aplicada", key=f"aplicada_{row['id']}", use_container_width=True):
-                            c.execute("""
-                                UPDATE medicacoes_agendadas
-                                SET status = ?
-                                WHERE id = ?
-                            """, ("Aplicada", str(row["id"])))
+                            c.execute("UPDATE medicacoes_agendadas SET status = ? WHERE id = ?", ("Aplicada", str(row["id"])))
                             conn.commit()
                             st.success("Medicação marcada como aplicada.")
                             st.rerun()
@@ -2676,79 +2744,35 @@ elif op == "Alertas WhatsApp":
             st.markdown("### Todos os agendamentos")
             st.dataframe(df.drop(columns=["data_hora_dt"], errors="ignore"), use_container_width=True)
 
-    # -----------------------------------------------------
-    # ALERTA MANUAL
-    # -----------------------------------------------------
     elif aba == "Enviar Alerta Manual":
+        st.markdown("### Enviar alerta manual")
+
         if funcionarios.empty:
             st.warning("Cadastre funcionários ativos primeiro.")
         else:
             funcionarios["descricao"] = funcionarios["nome"] + " - " + funcionarios["cargo"].fillna("")
             escolha = st.selectbox("Funcionário", funcionarios["descricao"].tolist())
             funcionario_nome = escolha.split(" - ")[0]
-
             funcionario = funcionarios[funcionarios["nome"] == funcionario_nome].iloc[0]
             telefone = str(funcionario["telefone"] or "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
 
-            tipo_alerta = st.selectbox(
-                "Tipo de alerta",
-                [
-                    "Vacina / Vermifugação",
-                    "Medicamento acabando",
-                    "Parto próximo",
-                    "Recebimento em aberto",
-                    "Tratamento veterinário",
-                    "Aviso operacional",
-                    "Outro"
-                ]
-            )
+            tipo_alerta = st.selectbox("Tipo de alerta", ["Vacina / Vermifugação", "Medicamento acabando", "Parto próximo", "Recebimento em aberto", "Tratamento veterinário", "Aviso operacional", "Outro"])
+            mensagem = st.text_area("Mensagem", value="Olá, favor verificar o alerta no sistema Rancho Recanto Verde.", height=160)
 
-            sugestoes = {
-                "Vacina / Vermifugação": "Olá, temos vacina/vermifugação próxima ou vencida no sistema. Favor verificar o Controle Sanitário.",
-                "Medicamento acabando": "Olá, há medicamento com estoque baixo na Farmácia do haras. Favor verificar reposição.",
-                "Parto próximo": "Olá, há previsão de parto próxima no módulo de Reprodução. Favor acompanhar a receptora.",
-                "Recebimento em aberto": "Olá, existem recebimentos em aberto no financeiro. Favor verificar.",
-                "Tratamento veterinário": "Olá, há tratamento veterinário/retorno previsto. Favor verificar o módulo Veterinário.",
-                "Aviso operacional": "Olá, favor verificar as demandas operacionais do haras no sistema.",
-                "Outro": ""
-            }
+            numero = normalizar_whatsapp(telefone)
+            st.info(f"Funcionário: {funcionario_nome} | WhatsApp: +{numero}")
 
-            mensagem = st.text_area("Mensagem", value=sugestoes.get(tipo_alerta, ""), height=160)
+            st.link_button("📲 Abrir WhatsApp com mensagem pronta", f"https://wa.me/{numero}?text={quote(mensagem)}", use_container_width=True)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.info(f"Funcionário: {funcionario_nome}")
-            with col2:
-                st.info(f"WhatsApp: {telefone}")
+            if st.button("🚀 Enviar via Twilio", use_container_width=True, disabled=not twilio_configurado()):
+                ok, sid, erro = enviar_whatsapp_twilio(telefone, mensagem)
+                if ok:
+                    registrar_alerta_whatsapp(funcionario_nome, telefone, tipo_alerta, mensagem, "Enviado via Twilio", sid_twilio=sid)
+                    st.success("Mensagem enviada pelo Twilio!")
+                else:
+                    registrar_alerta_whatsapp(funcionario_nome, telefone, tipo_alerta, mensagem, "Erro Twilio", erro_twilio=erro)
+                    st.error(f"Erro ao enviar: {erro}")
 
-            if telefone:
-                numero = telefone
-                if not numero.startswith("55"):
-                    numero = "55" + numero
-
-                link = f"https://wa.me/{numero}?text={quote(mensagem)}"
-                st.link_button("📲 Abrir WhatsApp com mensagem pronta", link)
-
-            if st.button("Registrar Alerta no Histórico"):
-                c.execute("""
-                    INSERT INTO alertas_whatsapp
-                    (funcionario, telefone, tipo_alerta, mensagem, data_envio, status, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    funcionario_nome,
-                    telefone,
-                    tipo_alerta,
-                    mensagem,
-                    datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    "Gerado",
-                    ""
-                ))
-                conn.commit()
-                st.success("Alerta registrado no histórico.")
-
-    # -----------------------------------------------------
-    # HISTÓRICO
-    # -----------------------------------------------------
     elif aba == "Histórico de Alertas":
         df_alertas = pd.read_sql_query("SELECT * FROM alertas_whatsapp WHERE funcionario IS NOT NULL", conn)
         df_medicacoes = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE animal IS NOT NULL", conn)
@@ -2756,26 +2780,16 @@ elif op == "Alertas WhatsApp":
         st.markdown("### Histórico de alertas WhatsApp")
         if not df_alertas.empty:
             st.dataframe(df_alertas, use_container_width=True)
-            st.download_button(
-                "📥 Baixar Histórico de Alertas",
-                data=gerar_excel(df_alertas),
-                file_name="historico_alertas_whatsapp.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("📥 Baixar Histórico de Alertas", data=gerar_excel(df_alertas), file_name="historico_alertas_whatsapp.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.warning("Nenhum alerta registrado.")
 
         st.markdown("### Histórico de medicações agendadas")
         if not df_medicacoes.empty:
             st.dataframe(df_medicacoes, use_container_width=True)
-            st.download_button(
-                "📥 Baixar Medicações Agendadas",
-                data=gerar_excel(df_medicacoes),
-                file_name="medicacoes_agendadas.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
         else:
             st.info("Nenhuma medicação agendada.")
+
 
 # =========================================================
 # RELATÓRIOS / GRÁFICOS
