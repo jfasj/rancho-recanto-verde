@@ -1117,32 +1117,143 @@ elif op == "Cadastrar Animal":
 # =========================================================
 
 elif op == "Animais por Tipo":
-    titulo_pagina("📋 Animais por Tipo", "Consulte e filtre os animais cadastrados")
+    titulo_pagina("📋 Animais por Tipo", "Consulte, filtre e altere os animais cadastrados")
+
+    aba = st.radio(
+        "Opção",
+        ["Consultar Animais", "Alterar Animal"],
+        horizontal=True
+    )
 
     df = listar_animais()
 
-    if not df.empty:
-        col1, col2 = st.columns(2)
-        with col1:
-            filtro = st.selectbox("Filtrar por tipo", ["Todos"] + tipos)
-        with col2:
-            filtro_status = st.selectbox("Filtrar por status", ["Todos", "Ativo", "Vendido", "Óbito", "Transferido", "Outro"])
-
-        if filtro != "Todos":
-            df = df[df["tipo"] == filtro]
-        if filtro_status != "Todos":
-            df = df[df["status"] == filtro_status]
-
-        st.dataframe(df, use_container_width=True)
-
-        st.download_button(
-            "📥 Baixar Excel",
-            data=gerar_excel(df),
-            file_name="animais_rancho_recanto_verde.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
+    if df.empty:
         st.warning("Nenhum animal cadastrado ainda.")
+    else:
+        if aba == "Consultar Animais":
+            col1, col2 = st.columns(2)
+
+            with col1:
+                filtro = st.selectbox("Filtrar por tipo", ["Todos"] + tipos)
+
+            with col2:
+                filtro_status = st.selectbox("Filtrar por status", ["Todos", "Ativo", "Vendido", "Óbito", "Transferido", "Outro"])
+
+            df_view = df.copy()
+
+            if filtro != "Todos":
+                df_view = df_view[df_view["tipo"] == filtro]
+
+            if filtro_status != "Todos":
+                df_view = df_view[df_view["status"] == filtro_status]
+
+            st.dataframe(df_view, use_container_width=True)
+
+            st.download_button(
+                "📥 Baixar Excel",
+                data=gerar_excel(df_view),
+                file_name="animais_rancho_recanto_verde.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        elif aba == "Alterar Animal":
+            st.markdown("### Alterar cadastro do animal")
+
+            df["descricao"] = df["id"].astype(str) + " - " + df["nome"].fillna("") + " - " + df["tipo"].fillna("")
+            escolha = st.selectbox("Escolha o animal", df["descricao"].tolist())
+            animal_id = escolha.split(" - ")[0]
+
+            animal = pd.read_sql_query(
+                "SELECT * FROM animais WHERE id = ?",
+                conn,
+                params=(animal_id,)
+            ).iloc[0]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                nome = st.text_input("Nome do animal", value=str(animal.get("nome", "") or ""))
+                tipo = st.selectbox(
+                    "Tipo",
+                    tipos,
+                    index=tipos.index(animal["tipo"]) if animal.get("tipo") in tipos else 0
+                )
+                especie = st.text_input("Espécie", value=str(animal.get("especie", "") or ""))
+                raca = st.text_input("Raça", value=str(animal.get("raca", "") or ""))
+                sexo = st.selectbox(
+                    "Sexo",
+                    ["Macho", "Fêmea"],
+                    index=0 if animal.get("sexo") != "Fêmea" else 1
+                )
+                nascimento_txt = st.text_input("Nascimento", value=str(animal.get("nascimento", "") or ""))
+                cor = st.text_input("Pelagem / Cor", value=str(animal.get("cor", "") or ""))
+
+            with col2:
+                responsavel = st.text_input("Responsável", value=str(animal.get("responsavel", "") or ""))
+                cpf = st.text_input("CPF", value=str(animal.get("cpf", "") or ""))
+                telefone = st.text_input("Telefone", value=str(animal.get("telefone", "") or ""))
+                local = st.text_input("Local / Baia / Piquete", value=str(animal.get("local", "") or ""))
+                microchip = st.text_input("Microchip / Identificação", value=str(animal.get("microchip", "") or ""))
+                status_opcoes = ["Ativo", "Vendido", "Óbito", "Transferido", "Outro"]
+                status_animal = st.selectbox(
+                    "Status",
+                    status_opcoes,
+                    index=status_opcoes.index(animal["status"]) if animal.get("status") in status_opcoes else 0
+                )
+
+            st.markdown("### Dados ABQM")
+            col_abqm1, col_abqm2 = st.columns(2)
+
+            with col_abqm1:
+                registro_abqm = st.text_input("Registro ABQM", value=str(animal.get("registro_abqm", "") or ""))
+                nome_oficial_abqm = st.text_input("Nome oficial ABQM", value=str(animal.get("nome_oficial_abqm", "") or ""))
+                pai_abqm = st.text_input("Pai", value=str(animal.get("pai_abqm", "") or ""))
+                mae_abqm = st.text_input("Mãe", value=str(animal.get("mae_abqm", "") or ""))
+
+            with col_abqm2:
+                criador_abqm = st.text_input("Criador", value=str(animal.get("criador_abqm", "") or ""))
+                proprietario_abqm = st.text_input("Proprietário", value=str(animal.get("proprietario_abqm", "") or ""))
+                link_abqm = st.text_input("Link da consulta ABQM", value=str(animal.get("link_abqm", "") or ""))
+                obs_abqm = st.text_area("Observações ABQM", value=str(animal.get("obs_abqm", "") or ""))
+
+            obs = st.text_area("Observações gerais", value=str(animal.get("obs", "") or ""))
+
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                if st.button("💾 Salvar Alterações do Animal", use_container_width=True):
+                    c.execute("""
+                        UPDATE animais
+                        SET nome = ?, tipo = ?, especie = ?, raca = ?, sexo = ?,
+                            nascimento = ?, cor = ?, responsavel = ?, cpf = ?,
+                            telefone = ?, local = ?, microchip = ?, status = ?,
+                            registro_abqm = ?, nome_oficial_abqm = ?, pai_abqm = ?,
+                            mae_abqm = ?, criador_abqm = ?, proprietario_abqm = ?,
+                            link_abqm = ?, obs_abqm = ?, obs = ?
+                        WHERE id = ?
+                    """, (
+                        nome, tipo, especie, raca, sexo,
+                        nascimento_txt, cor, responsavel, cpf,
+                        telefone, local, microchip, status_animal,
+                        registro_abqm, nome_oficial_abqm, pai_abqm,
+                        mae_abqm, criador_abqm, proprietario_abqm,
+                        link_abqm, obs_abqm, obs,
+                        animal_id
+                    ))
+                    conn.commit()
+                    st.success("Animal alterado com sucesso!")
+                    st.rerun()
+
+            with col_btn2:
+                confirmar = st.checkbox("Confirmar exclusão deste animal")
+                if st.button("🗑️ Excluir Animal", use_container_width=True):
+                    if confirmar:
+                        c.execute("DELETE FROM animais WHERE id = ?", (animal_id,))
+                        conn.commit()
+                        st.success("Animal excluído com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Marque a confirmação para excluir.")
 
 
 # =========================================================
@@ -2217,7 +2328,7 @@ elif op == "Funcionários":
 
     aba = st.radio(
         "Opção",
-        ["Cadastrar Funcionário", "Funcionários Cadastrados"],
+        ["Cadastrar Funcionário", "Funcionários Cadastrados", "Alterar Funcionário"],
         horizontal=True
     )
 
@@ -2228,7 +2339,7 @@ elif op == "Funcionários":
             nome = st.text_input("Nome completo")
             cpf = st.text_input("CPF")
             rg = st.text_input("RG")
-            telefone = st.text_input("Telefone / WhatsApp")
+            telefone = st.text_input("Telefone / WhatsApp com DDD")
             email = st.text_input("E-mail")
             endereco = st.text_area("Endereço completo")
 
@@ -2259,30 +2370,116 @@ elif op == "Funcionários":
 
         if not df.empty:
             col1, col2 = st.columns(2)
+
             with col1:
                 filtro_status = st.selectbox("Filtrar por status", ["Todos", "Ativo", "Afastado", "Desligado", "Férias", "Outro"])
+
             with col2:
                 filtro_setor = st.selectbox("Filtrar por setor", ["Todos", "Operacional", "Veterinário", "Financeiro", "Administrativo", "Reprodução", "Outro"])
 
+            df_view = df.copy()
+
             if filtro_status != "Todos":
-                df = df[df["status"] == filtro_status]
+                df_view = df_view[df_view["status"] == filtro_status]
+
             if filtro_setor != "Todos":
-                df = df[df["setor"] == filtro_setor]
+                df_view = df_view[df_view["setor"] == filtro_setor]
 
-            if not df.empty:
-                df["salario_num"] = pd.to_numeric(df["salario"], errors="coerce").fillna(0)
-                st.metric("Folha mensal filtrada", moeda(df["salario_num"].sum()))
+            if not df_view.empty:
+                df_view["salario_num"] = pd.to_numeric(df_view["salario"], errors="coerce").fillna(0)
+                st.metric("Folha mensal filtrada", moeda(df_view["salario_num"].sum()))
 
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df_view, use_container_width=True)
 
             st.download_button(
                 "📥 Baixar Funcionários",
-                data=gerar_excel(df),
+                data=gerar_excel(df_view),
                 file_name="funcionarios_rancho_recanto_verde.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
             st.warning("Nenhum funcionário cadastrado.")
+
+    elif aba == "Alterar Funcionário":
+        df = pd.read_sql_query("SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != ''", conn)
+
+        if df.empty:
+            st.warning("Nenhum funcionário cadastrado.")
+        else:
+            df["descricao"] = df["id"].astype(str) + " - " + df["nome"].fillna("") + " - " + df["cargo"].fillna("")
+            escolha = st.selectbox("Escolha o funcionário", df["descricao"].tolist())
+            funcionario_id = escolha.split(" - ")[0]
+
+            funcionario = pd.read_sql_query(
+                "SELECT * FROM funcionarios WHERE id = ?",
+                conn,
+                params=(funcionario_id,)
+            ).iloc[0]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                nome = st.text_input("Nome completo", value=str(funcionario.get("nome", "") or ""))
+                cpf = st.text_input("CPF", value=str(funcionario.get("cpf", "") or ""))
+                rg = st.text_input("RG", value=str(funcionario.get("rg", "") or ""))
+                telefone = st.text_input("Telefone / WhatsApp com DDD", value=str(funcionario.get("telefone", "") or ""))
+                email = st.text_input("E-mail", value=str(funcionario.get("email", "") or ""))
+                endereco = st.text_area("Endereço completo", value=str(funcionario.get("endereco", "") or ""))
+
+            with col2:
+                cargo = st.text_input("Cargo / Função", value=str(funcionario.get("cargo", "") or ""))
+                setores = ["Operacional", "Veterinário", "Financeiro", "Administrativo", "Reprodução", "Outro"]
+                setor = st.selectbox(
+                    "Setor",
+                    setores,
+                    index=setores.index(funcionario["setor"]) if funcionario.get("setor") in setores else 0
+                )
+                salario = st.number_input(
+                    "Salário",
+                    min_value=0.0,
+                    step=100.0,
+                    value=float(funcionario.get("salario") or 0)
+                )
+                data_admissao = st.text_input("Data de admissão", value=str(funcionario.get("data_admissao", "") or ""))
+                status_opcoes = ["Ativo", "Afastado", "Desligado", "Férias", "Outro"]
+                status = st.selectbox(
+                    "Status",
+                    status_opcoes,
+                    index=status_opcoes.index(funcionario["status"]) if funcionario.get("status") in status_opcoes else 0
+                )
+                documentos = st.text_area("Documentos / observações de documentos", value=str(funcionario.get("documentos", "") or ""))
+                obs = st.text_area("Observações gerais", value=str(funcionario.get("obs", "") or ""))
+
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                if st.button("💾 Salvar Alterações do Funcionário", use_container_width=True):
+                    c.execute("""
+                        UPDATE funcionarios
+                        SET nome = ?, cpf = ?, rg = ?, telefone = ?, email = ?,
+                            endereco = ?, cargo = ?, setor = ?, salario = ?,
+                            data_admissao = ?, status = ?, documentos = ?, obs = ?
+                        WHERE id = ?
+                    """, (
+                        nome, cpf, rg, telefone, email,
+                        endereco, cargo, setor, str(salario),
+                        data_admissao, status, documentos, obs,
+                        funcionario_id
+                    ))
+                    conn.commit()
+                    st.success("Funcionário alterado com sucesso!")
+                    st.rerun()
+
+            with col_btn2:
+                confirmar = st.checkbox("Confirmar exclusão deste funcionário")
+                if st.button("🗑️ Excluir Funcionário", use_container_width=True):
+                    if confirmar:
+                        c.execute("DELETE FROM funcionarios WHERE id = ?", (funcionario_id,))
+                        conn.commit()
+                        st.success("Funcionário excluído com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Marque a confirmação para excluir.")
 
 
 # =========================================================
