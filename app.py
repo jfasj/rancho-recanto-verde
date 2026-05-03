@@ -242,6 +242,21 @@ def criar_admin_padrao():
         conn.commit()
 
 
+
+def atualizar_admin_permissoes():
+    c.execute("""
+        UPDATE usuarios
+        SET permissoes = ?, perfil = ?, ativo = ?
+        WHERE nome = ?
+    """, (
+        "|".join(TODAS_PERMISSOES),
+        "Administrador",
+        "Sim",
+        "admin"
+    ))
+    conn.commit()
+
+
 def carregar_usuario(nome):
     df = pd.read_sql_query(
         "SELECT * FROM usuarios WHERE nome = ? AND ativo = 'Sim'",
@@ -261,6 +276,7 @@ def usuario_tem_permissao(pagina):
 
 
 criar_admin_padrao()
+atualizar_admin_permissoes()
 
 
 # =========================================================
