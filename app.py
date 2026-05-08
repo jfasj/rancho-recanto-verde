@@ -1,5 +1,6 @@
 
 import os
+import re
 import sqlite3
 import hashlib
 import xml.etree.ElementTree as ET
@@ -923,6 +924,43 @@ def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, stat
 # CONVERSÃO DE FARMÁCIA — mL / L
 # =========================================================
 
+def extrair_volume_descricao(produto):
+    """
+    Lê a descrição do produto e tenta identificar volume.
+    Exemplos:
+    - BUSCOFIN INJ 50ML -> 50, mL
+    - MERCEPTON INJ 100 ML -> 100, mL
+    - SORO FISIOLOGICO 1L -> 1, L
+    - RINGER LACTATO 500ML -> 500, mL
+    Se não encontrar, retorna 1, unidade sugerida.
+    """
+    texto = str(produto or "").upper()
+    texto = texto.replace(",", ".")
+
+    # Litros: 1L, 1 L, 1LT, 1 LITRO
+    m_litro = re.search(r"(\d+(?:\.\d+)?)\s*(L|LT|LITRO|LITROS)\b", texto)
+    if m_litro:
+        return float(m_litro.group(1)), "L"
+
+    # Mililitros: 50ML, 50 ML, 100ML
+    m_ml = re.search(r"(\d+(?:\.\d+)?)\s*(ML|M/L|MILILITRO|MILILITROS)\b", texto)
+    if m_ml:
+        return float(m_ml.group(1)), "mL"
+
+    # Padrões muito comuns sem espaço estranho: 50ML colado em palavra
+    m_ml_colado = re.search(r"(\d+(?:\.\d+)?)ML", texto)
+    if m_ml_colado:
+        return float(m_ml_colado.group(1)), "mL"
+
+    # Se for soro sem volume, sugere litro, mas mantém volume 1 para ajuste
+    if "SORO" in texto or "RINGER" in texto or "FISIOLOGICO" in texto or "FISIOLÓGICO" in texto:
+        return 1.0, "L"
+
+    return 1.0, "mL"
+
+
+
+
 def coluna_numerica_segura(df, coluna):
     if coluna in df.columns:
         return pd.to_numeric(df[coluna], errors="coerce").fillna(0)
@@ -955,6 +993,62 @@ def sugerir_unidade_controle(nome_medicamento="", unidade_atual=""):
     if "soro" in nome or "ringer" in nome or "fisiologico" in nome or "fisiológico" in nome or unidade_atual in ["L", "LT", "LITRO", "LITROS"]:
         return "L"
     return "mL"
+
+
+
+def recalcular_farmacia_por_descricao(somente_volume_igual_1=True):
+    """
+    Reprocessa medicamentos já importados para identificar automaticamente volume pela descrição.
+    Útil para corrigir itens antigos que entraram como 1 mL.
+    """
+    df = pd.read_sql_query("SELECT * FROM farmacia", conn)
+    if df.empty:
+        return 0
+
+    alterados = 0
+
+    for _, row in df.iterrows():
+        med_id = row["id"]
+        medicamento = str(row.get("medicamento", "") or "")
+        quantidade_compra = float(row.get("quantidade_compra") or row.get("quantidade") or 0)
+        preco_total = float(row.get("preco") or 0)
+
+        volume_atual = float(row.get("volume_por_unidade") or 0)
+        volume_extraido, unidade_extraida = extrair_volume_descricao(medicamento)
+
+        if somente_volume_igual_1 and volume_atual not in [0, 1]:
+            continue
+
+        if volume_extraido <= 1 and volume_atual not in [0, 1]:
+            continue
+
+        unidade_controle = unidade_extraida or sugerir_unidade_controle(medicamento, row.get("unidade", ""))
+
+        estoque_convertido = calcular_estoque_convertido(quantidade_compra, volume_extraido)
+        preco_por_controle = calcular_preco_por_controle(preco_total, estoque_convertido)
+
+        c.execute("""
+            UPDATE farmacia
+            SET volume_por_unidade = ?,
+                unidade_controle = ?,
+                estoque_convertido = ?,
+                quantidade_compra = ?,
+                preco_por_controle = ?
+            WHERE id = ?
+        """, (
+            str(volume_extraido),
+            unidade_controle,
+            str(estoque_convertido),
+            str(quantidade_compra),
+            str(preco_por_controle),
+            str(med_id)
+        ))
+
+        alterados += 1
+
+    conn.commit()
+    return alterados
+
 
 
 def atualizar_farmacia_antiga_para_controle():
@@ -1781,13 +1875,26 @@ elif op == "Importar NF-e / XML":
                 df_produtos["validade"] = ""
                 df_produtos["importar"] = True
 
+                df_produtos["volume_por_unidade"] = df_produtos["produto"].apply(lambda x: extrair_volume_descricao(x)[0])
+                df_produtos["unidade_controle"] = df_produtos["produto"].apply(lambda x: extrair_volume_descricao(x)[1])
+                df_produtos["estoque_convertido"] = df_produtos.apply(
+                    lambda r: calcular_estoque_convertido(limpar_numero(r["quantidade"]), limpar_numero(r["volume_por_unidade"])),
+                    axis=1
+                )
+                df_produtos["preco_por_controle"] = df_produtos.apply(
+                    lambda r: calcular_preco_por_controle(limpar_numero(r["valor_total"]), limpar_numero(r["estoque_convertido"])),
+                    axis=1
+                )
+
                 st.markdown("### Produtos encontrados")
-                st.caption("Revise os dados antes de importar. Validade normalmente não vem no XML e pode ser ajustada depois na Farmácia. O valor importado para estoque será o VALOR TOTAL do item da NF-e.")
+                st.caption("Revise os dados antes de importar. Validade normalmente não vem no XML e pode ser ajustada depois na Farmácia. O valor importado para estoque será o VALOR TOTAL do item da NF-e. O sistema também tentará identificar automaticamente o volume na descrição, como 50ML, 100ML ou 1L.")
 
                 df_editado = st.data_editor(
                     df_produtos[[
                         "importar", "produto", "ncm", "quantidade", "unidade",
-                        "valor_unitario", "valor_total", "categoria", "estoque_min", "validade"
+                        "valor_unitario", "valor_total", "volume_por_unidade",
+                        "unidade_controle", "estoque_convertido", "preco_por_controle",
+                        "categoria", "estoque_min", "validade"
                     ]],
                     use_container_width=True,
                     hide_index=True,
@@ -1826,8 +1933,13 @@ elif op == "Importar NF-e / XML":
 
                         if existente.empty:
                             valor_total_item = limpar_numero(row["valor_total"])
-                            unidade_controle = sugerir_unidade_controle(produto_nome, unidade)
-                            volume_por_unidade = 1.0
+                            volume_por_unidade = limpar_numero(row.get("volume_por_unidade", 0))
+                            unidade_controle = str(row.get("unidade_controle", "") or "").strip()
+                            if not volume_por_unidade:
+                                volume_por_unidade, unidade_controle_extraida = extrair_volume_descricao(produto_nome)
+                                unidade_controle = unidade_controle or unidade_controle_extraida
+
+                            unidade_controle = unidade_controle or sugerir_unidade_controle(produto_nome, unidade)
                             estoque_convertido = calcular_estoque_convertido(quantidade, volume_por_unidade)
                             preco_por_controle = calcular_preco_por_controle(valor_total_item, estoque_convertido)
 
@@ -1866,8 +1978,16 @@ elif op == "Importar NF-e / XML":
                             preco_atual_total = limpar_numero(existente.iloc[0].get("preco", 0))
                             novo_preco_total = preco_atual_total + valor_total_item
 
-                            unidade_controle = existente.iloc[0].get("unidade_controle", "") or sugerir_unidade_controle(produto_nome, unidade)
-                            volume_por_unidade = limpar_numero(existente.iloc[0].get("volume_por_unidade", 1)) or 1
+                            unidade_controle_existente = existente.iloc[0].get("unidade_controle", "")
+                            volume_existente = limpar_numero(existente.iloc[0].get("volume_por_unidade", 0))
+
+                            volume_editado = limpar_numero(row.get("volume_por_unidade", 0))
+                            unidade_editada = str(row.get("unidade_controle", "") or "").strip()
+                            volume_extraido, unidade_extraida = extrair_volume_descricao(produto_nome)
+
+                            unidade_controle = unidade_editada or unidade_controle_existente or unidade_extraida or sugerir_unidade_controle(produto_nome, unidade)
+                            volume_por_unidade = volume_editado or (volume_existente if volume_existente > 1 else volume_extraido)
+
                             estoque_convertido_atual = limpar_numero(existente.iloc[0].get("estoque_convertido", 0))
                             estoque_convertido_entrada = calcular_estoque_convertido(quantidade, volume_por_unidade)
                             novo_estoque_convertido = estoque_convertido_atual + estoque_convertido_entrada
@@ -1968,7 +2088,7 @@ elif op == "Farmácia":
                 ["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Soro", "Outro"]
             )
             quantidade_compra = st.number_input("Quantidade comprada", min_value=0.0, step=1.0)
-            unidade_compra = st.selectbox("Unidade da compra", ["FR", "UN", "CX", "AMP", "L", "mL", "Outro"])
+            unidade_compra = st.selectbox("Unidade da compra", ["FR", "UN", "CX", "AMP", "L", "mL", "KG", "G", "SC", "Outro"])
             volume_por_unidade = st.number_input(
                 "Volume por unidade",
                 min_value=0.0,
@@ -1984,7 +2104,7 @@ elif op == "Farmácia":
 
         with col2:
             estoque_convertido = calcular_estoque_convertido(quantidade_compra, volume_por_unidade)
-            st.metric("Estoque convertido", f"{estoque_convertido:.2f} {unidade_controle}")
+            st.metric("Estoque convertido", f"{estoque_convertido:,.2f} {unidade_controle}".replace(",", "X").replace(".", ",").replace("X", "."))
 
             estoque_min_controle = st.number_input(f"Estoque mínimo em {unidade_controle}", min_value=0.0, step=1.0)
             preco_total = st.number_input("Valor total da compra", min_value=0.0, step=1.0)
@@ -2021,21 +2141,72 @@ elif op == "Farmácia":
             df["preco_por_controle_num"] = coluna_numerica_segura(df, "preco_por_controle")
             df["valor_real_estoque"] = df["estoque_convertido_num"] * df["preco_por_controle_num"]
 
-            st.metric("Valor total convertido em estoque", moeda(df["valor_real_estoque"].sum()))
+            total_estoque = df["valor_real_estoque"].sum()
+            total_itens = len(df)
+            itens_baixos = 0
+            if "estoque_min_controle" in df.columns:
+                df["estoque_min_controle_num"] = coluna_numerica_segura(df, "estoque_min_controle")
+                itens_baixos = len(df[df["estoque_convertido_num"] <= df["estoque_min_controle_num"]])
 
-            colunas = [
-                "id", "medicamento", "categoria", "quantidade_compra", "unidade_compra",
-                "volume_por_unidade", "unidade_controle", "estoque_convertido",
-                "estoque_min_controle", "preco_por_controle", "validade", "fornecedor", "obs"
-            ]
-            st.dataframe(df[[c0 for c0 in colunas if c0 in df.columns]], use_container_width=True)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Valor total em estoque", moeda(total_estoque))
+            col2.metric("Itens cadastrados", total_itens)
+            col3.metric("Itens em alerta", itens_baixos)
 
-            st.download_button(
-                "📥 Baixar Estoque",
-                data=gerar_excel(df),
-                file_name="estoque_farmacia_convertido.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.markdown("### Ações rápidas")
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                if st.button("🔄 Recalcular volumes pela descrição", use_container_width=True):
+                    alterados = recalcular_farmacia_por_descricao(somente_volume_igual_1=True)
+                    st.success(f"{alterados} medicamento(s) recalculado(s).")
+                    st.rerun()
+
+            with col_btn2:
+                st.download_button(
+                    "📥 Baixar Estoque Completo",
+                    data=gerar_excel(df),
+                    file_name="estoque_farmacia_convertido.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+            st.markdown("---")
+            st.markdown("### Consulta do estoque")
+
+            busca = st.text_input("Buscar medicamento")
+            df_view = df.copy()
+
+            if busca:
+                df_view = df_view[df_view["medicamento"].str.contains(busca, case=False, na=False)]
+
+            resumo_cols = ["id", "medicamento", "categoria", "estoque_convertido", "unidade_controle", "preco_por_controle", "valor_real_estoque"]
+            resumo_cols = [c0 for c0 in resumo_cols if c0 in df_view.columns]
+            st.dataframe(df_view[resumo_cols], use_container_width=True, hide_index=True)
+
+            if not df_view.empty:
+                st.markdown("### Detalhe do medicamento")
+                df_view["descricao"] = df_view["id"].astype(str) + " - " + df_view["medicamento"].fillna("")
+                escolha = st.selectbox("Clique/selecione um medicamento para abrir o detalhe", df_view["descricao"].tolist())
+                med_id = escolha.split(" - ")[0]
+
+                med = df[df["id"].astype(str) == str(med_id)].iloc[0]
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Estoque", f"{float(med.get('estoque_convertido') or 0):,.2f} {med.get('unidade_controle') or ''}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c2.metric("Volume por unidade", f"{float(med.get('volume_por_unidade') or 0):,.2f} {med.get('unidade_controle') or ''}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c3.metric("Custo por unidade controle", moeda(float(med.get("preco_por_controle") or 0)))
+                c4.metric("Valor em estoque", moeda(float(med.get("valor_real_estoque") or 0)))
+
+                st.markdown(f"""
+                **Medicamento:** {med.get('medicamento', '')}  
+                **Categoria:** {med.get('categoria', '')}  
+                **Quantidade comprada:** {med.get('quantidade_compra', '')} {med.get('unidade_compra', '')}  
+                **Fornecedor:** {med.get('fornecedor', '')}  
+                **Validade:** {med.get('validade', '')}  
+                **Observações:** {med.get('obs', '')}
+                """)
+
         else:
             st.warning("Nenhum medicamento cadastrado.")
 
@@ -2059,10 +2230,21 @@ elif op == "Farmácia":
                 categoria = st.selectbox("Categoria", categorias, index=categorias.index(med["categoria"]) if med.get("categoria") in categorias else len(categorias)-1)
 
                 quantidade_compra = st.number_input("Quantidade comprada", min_value=0.0, step=1.0, value=float(med.get("quantidade_compra") or med.get("quantidade") or 0))
-                unidades_compra = ["FR", "UN", "CX", "AMP", "L", "mL", "Outro"]
+                unidades_compra = ["FR", "UN", "CX", "AMP", "L", "mL", "KG", "G", "SC", "Outro"]
                 unidade_atual = med.get("unidade_compra") or med.get("unidade") or "FR"
                 unidade_compra = st.selectbox("Unidade da compra", unidades_compra, index=unidades_compra.index(unidade_atual) if unidade_atual in unidades_compra else 0)
                 volume_por_unidade = st.number_input("Volume por unidade", min_value=0.0, step=1.0, value=float(med.get("volume_por_unidade") or 1))
+
+                if st.button("🔎 Recalcular volume pela descrição", use_container_width=True):
+                    vol, un = extrair_volume_descricao(medicamento)
+                    c.execute("""
+                        UPDATE farmacia
+                        SET volume_por_unidade = ?, unidade_controle = ?
+                        WHERE id = ?
+                    """, (str(vol), un, str(med_id)))
+                    conn.commit()
+                    st.success(f"Volume identificado: {vol} {un}.")
+                    st.rerun()
 
                 unidade_controle_atual = med.get("unidade_controle") or sugerir_unidade_controle(medicamento, unidade_compra)
                 unidades_controle = ["mL", "L"]
