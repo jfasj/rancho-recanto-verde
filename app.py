@@ -65,7 +65,15 @@ def add_col(tabela, coluna, tipo="TEXT"):
     cols = pd.read_sql_query(f"PRAGMA table_info({tabela})", conn)["name"].tolist()
     if coluna not in cols:
         c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
-        conn.commit()
+        
+for col in [
+    "quantidade_compra", "unidade_compra", "volume_por_unidade",
+    "unidade_controle", "estoque_convertido", "estoque_min_controle",
+    "preco_por_controle"
+]:
+    add_col("farmacia", col)
+
+conn.commit()
 
 
 for col in [
@@ -914,6 +922,14 @@ def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, stat
 # =========================================================
 # CONVERSÃO DE FARMÁCIA — mL / L
 # =========================================================
+
+def coluna_numerica_segura(df, coluna):
+    if coluna in df.columns:
+        return pd.to_numeric(df[coluna], errors="coerce").fillna(0)
+    return pd.Series([0] * len(df), index=df.index, dtype="float64")
+
+
+
 
 def calcular_estoque_convertido(quantidade_compra, volume_por_unidade):
     try:
@@ -1959,8 +1975,8 @@ elif op == "Farmácia":
         df = listar_farmacia()
 
         if not df.empty:
-            df["estoque_convertido_num"] = pd.to_numeric(df.get("estoque_convertido", 0), errors="coerce").fillna(0)
-            df["preco_por_controle_num"] = pd.to_numeric(df.get("preco_por_controle", 0), errors="coerce").fillna(0)
+            df["estoque_convertido_num"] = coluna_numerica_segura(df, "estoque_convertido")
+            df["preco_por_controle_num"] = coluna_numerica_segura(df, "preco_por_controle")
             df["valor_real_estoque"] = df["estoque_convertido_num"] * df["preco_por_controle_num"]
 
             st.metric("Valor total convertido em estoque", moeda(df["valor_real_estoque"].sum()))
@@ -2039,7 +2055,7 @@ elif op == "Farmácia":
                         str(preco_total), str(quantidade_compra), unidade_compra,
                         str(volume_por_unidade), unidade_controle,
                         str(estoque_convertido), str(estoque_min_controle),
-                        str(preco_por_controle), med_id
+                        str(preco_por_controle), str(med_id)
                     ))
                     conn.commit()
                     st.success("Medicamento alterado com sucesso!")
@@ -2060,8 +2076,8 @@ elif op == "Farmácia":
         df = listar_farmacia()
 
         if not df.empty:
-            df["estoque_convertido_num"] = pd.to_numeric(df.get("estoque_convertido", 0), errors="coerce").fillna(0)
-            df["estoque_min_controle_num"] = pd.to_numeric(df.get("estoque_min_controle", 0), errors="coerce").fillna(0)
+            df["estoque_convertido_num"] = coluna_numerica_segura(df, "estoque_convertido")
+            df["estoque_min_controle_num"] = coluna_numerica_segura(df, "estoque_min_controle")
 
             alerta = df[(df["estoque_convertido_num"] <= df["estoque_min_controle_num"]) | (df["estoque_convertido_num"] <= 0)]
 
