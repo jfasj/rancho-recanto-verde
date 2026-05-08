@@ -1782,7 +1782,7 @@ elif op == "Importar NF-e / XML":
                 df_produtos["importar"] = True
 
                 st.markdown("### Produtos encontrados")
-                st.caption("Revise os dados antes de importar. Validade normalmente não vem no XML e pode ser ajustada depois na Farmácia.")
+                st.caption("Revise os dados antes de importar. Validade normalmente não vem no XML e pode ser ajustada depois na Farmácia. O valor importado para estoque será o VALOR TOTAL do item da NF-e.")
 
                 df_editado = st.data_editor(
                     df_produtos[[
@@ -1825,35 +1825,77 @@ elif op == "Importar NF-e / XML":
                         )
 
                         if existente.empty:
+                            valor_total_item = limpar_numero(row["valor_total"])
+                            unidade_controle = sugerir_unidade_controle(produto_nome, unidade)
+                            volume_por_unidade = 1.0
+                            estoque_convertido = calcular_estoque_convertido(quantidade, volume_por_unidade)
+                            preco_por_controle = calcular_preco_por_controle(valor_total_item, estoque_convertido)
+
                             c.execute("""
                                 INSERT INTO farmacia
                                 (medicamento, categoria, quantidade, estoque_min, unidade,
-                                 preco, validade, fornecedor, obs)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 preco, validade, fornecedor, obs,
+                                 quantidade_compra, unidade_compra, volume_por_unidade,
+                                 unidade_controle, estoque_convertido, estoque_min_controle,
+                                 preco_por_controle)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
                                 produto_nome,
                                 categoria,
                                 str(quantidade),
                                 str(estoque_min),
                                 unidade,
-                                str(preco),
+                                str(valor_total_item),
                                 validade,
                                 dados_nfe["fornecedor"],
-                                f"Importado da NF-e {dados_nfe['numero_nfe']}"
+                                f"Importado da NF-e {dados_nfe['numero_nfe']} | Valor total do item",
+                                str(quantidade),
+                                unidade,
+                                str(volume_por_unidade),
+                                unidade_controle,
+                                str(estoque_convertido),
+                                str(estoque_min),
+                                str(preco_por_controle)
                             ))
                             importados += 1
                         else:
                             qtd_atual = limpar_numero(existente.iloc[0]["quantidade"])
                             nova_qtd = qtd_atual + quantidade
 
+                            valor_total_item = limpar_numero(row["valor_total"])
+                            preco_atual_total = limpar_numero(existente.iloc[0].get("preco", 0))
+                            novo_preco_total = preco_atual_total + valor_total_item
+
+                            unidade_controle = existente.iloc[0].get("unidade_controle", "") or sugerir_unidade_controle(produto_nome, unidade)
+                            volume_por_unidade = limpar_numero(existente.iloc[0].get("volume_por_unidade", 1)) or 1
+                            estoque_convertido_atual = limpar_numero(existente.iloc[0].get("estoque_convertido", 0))
+                            estoque_convertido_entrada = calcular_estoque_convertido(quantidade, volume_por_unidade)
+                            novo_estoque_convertido = estoque_convertido_atual + estoque_convertido_entrada
+
+                            preco_por_controle = calcular_preco_por_controle(novo_preco_total, novo_estoque_convertido)
+
                             c.execute("""
                                 UPDATE farmacia
-                                SET quantidade = ?, preco = ?, fornecedor = ?
+                                SET quantidade = ?,
+                                    preco = ?,
+                                    fornecedor = ?,
+                                    quantidade_compra = ?,
+                                    unidade_compra = ?,
+                                    volume_por_unidade = ?,
+                                    unidade_controle = ?,
+                                    estoque_convertido = ?,
+                                    preco_por_controle = ?
                                 WHERE medicamento = ?
                             """, (
                                 str(nova_qtd),
-                                str(preco),
+                                str(novo_preco_total),
                                 dados_nfe["fornecedor"],
+                                str(nova_qtd),
+                                unidade,
+                                str(volume_por_unidade),
+                                unidade_controle,
+                                str(novo_estoque_convertido),
+                                str(preco_por_controle),
                                 produto_nome
                             ))
                             atualizados += 1
