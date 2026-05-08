@@ -2315,12 +2315,13 @@ elif op == "Farmácia":
             st.warning("Nenhum medicamento cadastrado.")
 
 
+
 # =========================================================
 # VETERINÁRIO / TRATAMENTOS
 # =========================================================
 
 elif op == "Veterinário / Tratamentos":
-    titulo_pagina("🩺 Veterinário / Tratamentos", "Atendimentos, diagnósticos, baixa de estoque e alerta WhatsApp automático")
+    titulo_pagina("🩺 Veterinário / Tratamentos", "Atendimentos, diagnósticos, baixa de estoque em mL/L e alerta WhatsApp automático")
 
     aba = st.radio(
         "Opção",
@@ -2365,14 +2366,40 @@ elif op == "Veterinário / Tratamentos":
                 unidade_padrao = ""
 
                 if medicamento != "Nenhum":
-                    med_df = pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento = ?", conn, params=(medicamento,))
-                    if not med_df.empty:
-                        estoque_atual = float(med_df.iloc[0]["quantidade"] or 0)
-                        preco_unitario = float(med_df.iloc[0]["preco"] or 0)
-                        unidade_padrao = med_df.iloc[0]["unidade"] or ""
-                        st.info(f"Estoque atual: {estoque_atual} {unidade_padrao} | Preço unitário: {moeda(preco_unitario)}")
+                    med_df = pd.read_sql_query(
+                        "SELECT * FROM farmacia WHERE medicamento = ?",
+                        conn,
+                        params=(medicamento,)
+                    )
 
-                quantidade_usada = st.number_input("Quantidade usada", min_value=0.0, step=1.0)
+                    if not med_df.empty:
+                        med_row = med_df.iloc[0]
+
+                        unidade_padrao = med_row.get("unidade_controle", "") or med_row.get("unidade", "") or "mL"
+
+                        estoque_convertido = med_row.get("estoque_convertido", "")
+                        preco_por_controle = med_row.get("preco_por_controle", "")
+
+                        if estoque_convertido not in [None, ""]:
+                            estoque_atual = float(estoque_convertido or 0)
+                            preco_unitario = float(preco_por_controle or 0)
+                        else:
+                            estoque_atual = float(med_row.get("quantidade", 0) or 0)
+                            preco_unitario = float(med_row.get("preco", 0) or 0)
+
+                        st.info(
+                            (
+                                f"Estoque atual: {estoque_atual:,.2f} {unidade_padrao} | "
+                                f"Custo por {unidade_padrao}: {moeda(preco_unitario)}"
+                            ).replace(",", "X").replace(".", ",").replace("X", ".")
+                        )
+
+                quantidade_usada = st.number_input(
+                    f"Quantidade usada ({unidade_padrao or 'unidade de controle'})",
+                    min_value=0.0,
+                    step=1.0
+                )
+
                 unidade = st.text_input("Unidade usada", value=unidade_padrao)
                 dosagem = st.text_input("Dosagem / Forma de uso")
                 veterinario = st.text_input("Veterinário / Responsável técnico")
@@ -2380,6 +2407,12 @@ elif op == "Veterinário / Tratamentos":
 
                 custo_total = quantidade_usada * preco_unitario
                 st.metric("Custo estimado do tratamento", moeda(custo_total))
+
+                if medicamento != "Nenhum" and quantidade_usada > estoque_atual:
+                    st.error(
+                        f"Quantidade maior que o estoque disponível ({estoque_atual:,.2f} {unidade_padrao})."
+                        .replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
 
             st.markdown("---")
             st.markdown("### 📲 Alerta WhatsApp da medicação")
@@ -2416,6 +2449,7 @@ elif op == "Veterinário / Tratamentos":
                 f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
                 f"Animal: {animal_nome}\\n"
                 f"Medicamento: {medicamento}\\n"
+                f"Quantidade: {quantidade_usada} {unidade}\\n"
                 f"Dosagem/orientação: {dosagem}\\n"
                 f"Data e hora: {data_hora_medicacao.strftime('%d/%m/%Y %H:%M')}\\n\\n"
                 f"Favor confirmar a aplicação no sistema."
@@ -2426,15 +2460,19 @@ elif op == "Veterinário / Tratamentos":
             obs = st.text_area("Observações gerais")
 
             if st.button("Salvar Tratamento e Baixar Estoque"):
+                nova_qtd = estoque_atual
                 if medicamento != "Nenhum":
                     if quantidade_usada <= 0:
                         st.error("Informe a quantidade usada do medicamento.")
                         st.stop()
 
-                    ok, nova_qtd, preco_unitario, erro = baixar_estoque(medicamento, quantidade_usada)
+                    ok, nova_qtd, preco_unitario_final, erro = baixar_estoque(medicamento, quantidade_usada)
                     if not ok:
                         st.error(erro)
                         st.stop()
+
+                    preco_unitario = preco_unitario_final
+                    custo_total = quantidade_usada * preco_unitario_final
 
                 if gerar_alerta and funcionarios.empty:
                     st.error("Para gerar alerta WhatsApp, cadastre ao menos um funcionário ativo.")
@@ -2458,7 +2496,6 @@ elif op == "Veterinário / Tratamentos":
                     obs
                 ))
 
-                # Cria automaticamente o alerta na aba Alertas WhatsApp
                 if gerar_alerta and medicamento != "Nenhum":
                     c.execute("""
                         INSERT INTO medicacoes_agendadas
@@ -2483,10 +2520,15 @@ elif op == "Veterinário / Tratamentos":
 
                 conn.commit()
 
-                if gerar_alerta and medicamento != "Nenhum":
-                    st.success("Tratamento salvo, estoque baixado e alerta WhatsApp agendado para 1 hora antes.")
+                if medicamento != "Nenhum":
+                    st.success(
+                        (
+                            f"Tratamento salvo. Estoque atual: {nova_qtd:,.2f} {unidade}. "
+                            f"Custo do tratamento: {moeda(custo_total)}"
+                        ).replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
                 else:
-                    st.success(f"Tratamento salvo. Custo: {moeda(custo_total)}")
+                    st.success("Tratamento salvo.")
 
     elif aba == "Histórico de Tratamentos":
         df = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", conn)
