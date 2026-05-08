@@ -604,32 +604,61 @@ def status_data(data_txt, dias_alerta=30):
     return "OK"
 
 
-def baixar_estoque(produto, quantidade):
-    if produto == "Nenhum" or quantidade <= 0:
-        return True, 0.0, 0.0, ""
-
-    med_df = pd.read_sql_query(
+def baixar_estoque(medicamento, quantidade_usada):
+    med = pd.read_sql_query(
         "SELECT * FROM farmacia WHERE medicamento = ?",
         conn,
-        params=(produto,)
+        params=(medicamento,)
     )
 
-    if med_df.empty:
-        return False, 0.0, 0.0, "Produto não encontrado na farmácia."
+    if med.empty:
+        return False, 0, 0, "Medicamento não encontrado na farmácia."
 
-    estoque_atual = float(med_df.iloc[0]["quantidade"] or 0)
-    preco_unitario = float(med_df.iloc[0]["preco"] or 0)
+    row = med.iloc[0]
 
-    if quantidade > estoque_atual:
-        return False, estoque_atual, preco_unitario, "Quantidade maior que o estoque disponível."
+    try:
+        quantidade_usada = float(quantidade_usada or 0)
+    except Exception:
+        quantidade_usada = 0
 
-    nova_qtd = estoque_atual - quantidade
-    c.execute(
-        "UPDATE farmacia SET quantidade = ? WHERE medicamento = ?",
-        (str(nova_qtd), produto)
-    )
+    unidade_controle = row.get("unidade_controle", "") or row.get("unidade", "")
+    estoque_convertido = row.get("estoque_convertido", "")
 
-    return True, nova_qtd, preco_unitario, ""
+    if estoque_convertido not in [None, ""]:
+        estoque_atual = float(estoque_convertido or 0)
+        preco_unitario = float(row.get("preco_por_controle", 0) or 0)
+
+        if quantidade_usada > estoque_atual:
+            return False, estoque_atual, preco_unitario, f"Estoque insuficiente. Disponível: {estoque_atual} {unidade_controle}."
+
+        novo_estoque = estoque_atual - quantidade_usada
+
+        c.execute("""
+            UPDATE farmacia
+            SET estoque_convertido = ?
+            WHERE medicamento = ?
+        """, (str(novo_estoque), medicamento))
+
+        conn.commit()
+        return True, novo_estoque, preco_unitario, ""
+
+    estoque_atual = float(row["quantidade"] or 0)
+    preco_unitario = float(row["preco"] or 0)
+
+    if quantidade_usada > estoque_atual:
+        return False, estoque_atual, preco_unitario, "Estoque insuficiente."
+
+    novo_estoque = estoque_atual - quantidade_usada
+
+    c.execute("""
+        UPDATE farmacia
+        SET quantidade = ?
+        WHERE medicamento = ?
+    """, (str(novo_estoque), medicamento))
+
+    conn.commit()
+    return True, novo_estoque, preco_unitario, ""
+
 
 
 def gerar_excel(df):
@@ -878,6 +907,88 @@ def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, stat
         obs
     ))
     conn.commit()
+
+
+
+
+# =========================================================
+# CONVERSÃO DE FARMÁCIA — mL / L
+# =========================================================
+
+def calcular_estoque_convertido(quantidade_compra, volume_por_unidade):
+    try:
+        return float(quantidade_compra or 0) * float(volume_por_unidade or 0)
+    except Exception:
+        return 0.0
+
+
+def calcular_preco_por_controle(preco_total, estoque_convertido):
+    try:
+        preco_total = float(preco_total or 0)
+        estoque_convertido = float(estoque_convertido or 0)
+        if estoque_convertido <= 0:
+            return 0.0
+        return preco_total / estoque_convertido
+    except Exception:
+        return 0.0
+
+
+def sugerir_unidade_controle(nome_medicamento="", unidade_atual=""):
+    nome = str(nome_medicamento or "").lower()
+    unidade_atual = str(unidade_atual or "").upper()
+    if "soro" in nome or "ringer" in nome or "fisiologico" in nome or "fisiológico" in nome or unidade_atual in ["L", "LT", "LITRO", "LITROS"]:
+        return "L"
+    return "mL"
+
+
+def atualizar_farmacia_antiga_para_controle():
+    try:
+        df = pd.read_sql_query("SELECT * FROM farmacia", conn)
+        if df.empty:
+            return
+
+        for _, row in df.iterrows():
+            med_id = row["id"]
+            medicamento = row.get("medicamento", "")
+            unidade_compra = row.get("unidade_compra", "") or row.get("unidade", "") or "FR"
+            unidade_controle = row.get("unidade_controle", "") or sugerir_unidade_controle(medicamento, unidade_compra)
+            quantidade_compra = row.get("quantidade_compra", "") or row.get("quantidade", 0) or 0
+            volume_por_unidade = row.get("volume_por_unidade", "") or 1
+            estoque_convertido = row.get("estoque_convertido", "")
+
+            if estoque_convertido in [None, ""]:
+                estoque_convertido = calcular_estoque_convertido(quantidade_compra, volume_por_unidade)
+
+            estoque_min_controle = row.get("estoque_min_controle", "") or row.get("estoque_min", 0) or 0
+
+            preco_total = float(row.get("preco", 0) or 0) * float(quantidade_compra or 0)
+            preco_por_controle = row.get("preco_por_controle", "")
+            if preco_por_controle in [None, ""]:
+                preco_por_controle = calcular_preco_por_controle(preco_total, estoque_convertido)
+
+            c.execute("""
+                UPDATE farmacia
+                SET quantidade_compra = ?,
+                    unidade_compra = ?,
+                    volume_por_unidade = ?,
+                    unidade_controle = ?,
+                    estoque_convertido = ?,
+                    estoque_min_controle = ?,
+                    preco_por_controle = ?
+                WHERE id = ?
+            """, (
+                str(quantidade_compra),
+                unidade_compra,
+                str(volume_por_unidade),
+                unidade_controle,
+                str(estoque_convertido),
+                str(estoque_min_controle),
+                str(preco_por_controle),
+                str(med_id)
+            ))
+        conn.commit()
+    except Exception:
+        pass
 
 
 
@@ -1779,11 +1890,13 @@ elif op == "Importar NF-e / XML":
 # =========================================================
 
 elif op == "Farmácia":
-    titulo_pagina("💊 Farmácia", "Controle de estoque, custo e alerta de medicações")
+    titulo_pagina("💊 Farmácia", "Controle de estoque, custo e conversão para mL/L")
+
+    atualizar_farmacia_antiga_para_controle()
 
     aba = st.radio(
         "Opção",
-        ["Cadastrar Medicamento", "Estoque", "Alertas de Estoque"],
+        ["Cadastrar Medicamento", "Estoque", "Alterar Medicamento", "Alertas de Estoque"],
         horizontal=True
     )
 
@@ -1791,17 +1904,35 @@ elif op == "Farmácia":
         col1, col2 = st.columns(2)
 
         with col1:
-            medicamento = st.text_input("Medicamento / Produto")
+            medicamento = st.text_input("Medicamento")
             categoria = st.selectbox(
                 "Categoria",
-                ["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Outro"]
+                ["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Soro", "Outro"]
             )
-            quantidade = st.number_input("Quantidade em estoque", min_value=0.0, step=1.0)
-            estoque_min = st.number_input("Estoque mínimo", min_value=0.0, step=1.0)
-            unidade = st.selectbox("Unidade", ["ml", "dose", "comprimido", "frasco", "ampola", "sachê", "kg", "g", "unidade"])
+            quantidade_compra = st.number_input("Quantidade comprada", min_value=0.0, step=1.0)
+            unidade_compra = st.selectbox("Unidade da compra", ["FR", "UN", "CX", "AMP", "L", "mL", "Outro"])
+            volume_por_unidade = st.number_input(
+                "Volume por unidade",
+                min_value=0.0,
+                step=1.0,
+                help="Exemplo: frasco 50 mL = informe 50. Soro 1 litro = informe 1 e unidade controle L."
+            )
+            unidade_sugerida = sugerir_unidade_controle(medicamento, unidade_compra)
+            unidade_controle = st.selectbox(
+                "Unidade de controle",
+                ["mL", "L"],
+                index=1 if unidade_sugerida == "L" else 0
+            )
 
         with col2:
-            preco = st.number_input("Preço unitário", min_value=0.0, step=1.0)
+            estoque_convertido = calcular_estoque_convertido(quantidade_compra, volume_por_unidade)
+            st.metric("Estoque convertido", f"{estoque_convertido:.2f} {unidade_controle}")
+
+            estoque_min_controle = st.number_input(f"Estoque mínimo em {unidade_controle}", min_value=0.0, step=1.0)
+            preco_total = st.number_input("Valor total da compra", min_value=0.0, step=1.0)
+            preco_por_controle = calcular_preco_por_controle(preco_total, estoque_convertido)
+            st.metric(f"Custo por {unidade_controle}", moeda(preco_por_controle))
+
             validade = st.date_input("Validade", format="DD/MM/YYYY")
             fornecedor = st.text_input("Fornecedor")
             obs = st.text_area("Observações")
@@ -1809,59 +1940,137 @@ elif op == "Farmácia":
         if st.button("Salvar Medicamento"):
             c.execute("""
                 INSERT INTO farmacia
-                (medicamento, categoria, quantidade, estoque_min, unidade, preco, validade, fornecedor, obs)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (medicamento, categoria, quantidade, unidade, validade, fornecedor,
+                 obs, estoque_min, preco, quantidade_compra, unidade_compra,
+                 volume_por_unidade, unidade_controle, estoque_convertido,
+                 estoque_min_controle, preco_por_controle)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                medicamento, categoria, str(quantidade), str(estoque_min),
-                unidade, str(preco), br_data(validade), fornecedor, obs
+                medicamento, categoria, str(quantidade_compra), unidade_compra, br_data(validade),
+                fornecedor, obs, str(estoque_min_controle), str(preco_total),
+                str(quantidade_compra), unidade_compra, str(volume_por_unidade),
+                unidade_controle, str(estoque_convertido), str(estoque_min_controle),
+                str(preco_por_controle)
             ))
             conn.commit()
-            st.success("Medicamento cadastrado com sucesso!")
+            st.success("Medicamento cadastrado com estoque convertido!")
 
     elif aba == "Estoque":
         df = listar_farmacia()
 
         if not df.empty:
-            df["quantidade_num"] = pd.to_numeric(df["quantidade"], errors="coerce").fillna(0)
-            df["preco_num"] = pd.to_numeric(df["preco"], errors="coerce").fillna(0)
-            df["valor_total"] = df["quantidade_num"] * df["preco_num"]
+            df["estoque_convertido_num"] = pd.to_numeric(df.get("estoque_convertido", 0), errors="coerce").fillna(0)
+            df["preco_por_controle_num"] = pd.to_numeric(df.get("preco_por_controle", 0), errors="coerce").fillna(0)
+            df["valor_real_estoque"] = df["estoque_convertido_num"] * df["preco_por_controle_num"]
 
-            st.metric("Valor total em estoque", moeda(df["valor_total"].sum()))
-            st.dataframe(df, use_container_width=True)
+            st.metric("Valor total convertido em estoque", moeda(df["valor_real_estoque"].sum()))
+
+            colunas = [
+                "id", "medicamento", "categoria", "quantidade_compra", "unidade_compra",
+                "volume_por_unidade", "unidade_controle", "estoque_convertido",
+                "estoque_min_controle", "preco_por_controle", "validade", "fornecedor", "obs"
+            ]
+            st.dataframe(df[[c0 for c0 in colunas if c0 in df.columns]], use_container_width=True)
 
             st.download_button(
                 "📥 Baixar Estoque",
                 data=gerar_excel(df),
-                file_name="estoque_farmacia.xlsx",
+                file_name="estoque_farmacia_convertido.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
             st.warning("Nenhum medicamento cadastrado.")
 
+    elif aba == "Alterar Medicamento":
+        df = listar_farmacia()
+
+        if df.empty:
+            st.warning("Nenhum medicamento cadastrado.")
+        else:
+            df["descricao"] = df["id"].astype(str) + " - " + df["medicamento"].fillna("")
+            escolha = st.selectbox("Escolha o medicamento", df["descricao"].tolist())
+            med_id = escolha.split(" - ")[0]
+
+            med = pd.read_sql_query("SELECT * FROM farmacia WHERE id = ?", conn, params=(med_id,)).iloc[0]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                medicamento = st.text_input("Medicamento", value=str(med.get("medicamento", "") or ""))
+                categorias = ["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Soro", "Outro"]
+                categoria = st.selectbox("Categoria", categorias, index=categorias.index(med["categoria"]) if med.get("categoria") in categorias else len(categorias)-1)
+
+                quantidade_compra = st.number_input("Quantidade comprada", min_value=0.0, step=1.0, value=float(med.get("quantidade_compra") or med.get("quantidade") or 0))
+                unidades_compra = ["FR", "UN", "CX", "AMP", "L", "mL", "Outro"]
+                unidade_atual = med.get("unidade_compra") or med.get("unidade") or "FR"
+                unidade_compra = st.selectbox("Unidade da compra", unidades_compra, index=unidades_compra.index(unidade_atual) if unidade_atual in unidades_compra else 0)
+                volume_por_unidade = st.number_input("Volume por unidade", min_value=0.0, step=1.0, value=float(med.get("volume_por_unidade") or 1))
+
+                unidade_controle_atual = med.get("unidade_controle") or sugerir_unidade_controle(medicamento, unidade_compra)
+                unidades_controle = ["mL", "L"]
+                unidade_controle = st.selectbox("Unidade de controle", unidades_controle, index=unidades_controle.index(unidade_controle_atual) if unidade_controle_atual in unidades_controle else 0)
+
+            with col2:
+                estoque_convertido = st.number_input(f"Estoque atual em {unidade_controle}", min_value=0.0, step=1.0, value=float(med.get("estoque_convertido") or calcular_estoque_convertido(quantidade_compra, volume_por_unidade)))
+                estoque_min_controle = st.number_input(f"Estoque mínimo em {unidade_controle}", min_value=0.0, step=1.0, value=float(med.get("estoque_min_controle") or med.get("estoque_min") or 0))
+                preco_total = st.number_input("Valor total da compra/estoque", min_value=0.0, step=1.0, value=float(med.get("preco") or 0))
+                preco_por_controle = calcular_preco_por_controle(preco_total, estoque_convertido)
+                st.metric(f"Custo por {unidade_controle}", moeda(preco_por_controle))
+
+                validade = st.text_input("Validade", value=str(med.get("validade", "") or ""))
+                fornecedor = st.text_input("Fornecedor", value=str(med.get("fornecedor", "") or ""))
+                obs = st.text_area("Observações", value=str(med.get("obs", "") or ""))
+
+            colb1, colb2 = st.columns(2)
+            with colb1:
+                if st.button("💾 Salvar Alterações do Medicamento", use_container_width=True):
+                    c.execute("""
+                        UPDATE farmacia
+                        SET medicamento = ?, categoria = ?, quantidade = ?, unidade = ?,
+                            validade = ?, fornecedor = ?, obs = ?, estoque_min = ?,
+                            preco = ?, quantidade_compra = ?, unidade_compra = ?,
+                            volume_por_unidade = ?, unidade_controle = ?,
+                            estoque_convertido = ?, estoque_min_controle = ?,
+                            preco_por_controle = ?
+                        WHERE id = ?
+                    """, (
+                        medicamento, categoria, str(quantidade_compra), unidade_compra,
+                        validade, fornecedor, obs, str(estoque_min_controle),
+                        str(preco_total), str(quantidade_compra), unidade_compra,
+                        str(volume_por_unidade), unidade_controle,
+                        str(estoque_convertido), str(estoque_min_controle),
+                        str(preco_por_controle), med_id
+                    ))
+                    conn.commit()
+                    st.success("Medicamento alterado com sucesso!")
+                    st.rerun()
+
+            with colb2:
+                confirmar = st.checkbox("Confirmar exclusão deste medicamento")
+                if st.button("🗑️ Excluir Medicamento", use_container_width=True):
+                    if confirmar:
+                        c.execute("DELETE FROM farmacia WHERE id = ?", (med_id,))
+                        conn.commit()
+                        st.success("Medicamento excluído com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Marque a confirmação para excluir.")
+
     elif aba == "Alertas de Estoque":
         df = listar_farmacia()
 
         if not df.empty:
-            df["quantidade_num"] = pd.to_numeric(df["quantidade"], errors="coerce").fillna(0)
-            df["estoque_min_num"] = pd.to_numeric(df["estoque_min"], errors="coerce").fillna(0)
+            df["estoque_convertido_num"] = pd.to_numeric(df.get("estoque_convertido", 0), errors="coerce").fillna(0)
+            df["estoque_min_controle_num"] = pd.to_numeric(df.get("estoque_min_controle", 0), errors="coerce").fillna(0)
 
-            def status_estoque(row):
-                if row["quantidade_num"] <= 0:
-                    return "ACABOU"
-                elif row["quantidade_num"] <= row["estoque_min_num"]:
-                    return "ESTOQUE BAIXO"
-                return "OK"
+            alerta = df[(df["estoque_convertido_num"] <= df["estoque_min_controle_num"]) | (df["estoque_convertido_num"] <= 0)]
 
-            df["status"] = df.apply(status_estoque, axis=1)
-            alertas = df[df["status"] != "OK"]
-
-            if not alertas.empty:
-                st.warning("⚠️ Existem medicamentos acabando ou zerados.")
-                st.dataframe(alertas, use_container_width=True)
+            if not alerta.empty:
+                st.error("Medicamentos com estoque baixo ou zerado:")
+                cols = ["medicamento", "categoria", "estoque_convertido", "unidade_controle", "estoque_min_controle", "fornecedor"]
+                st.dataframe(alerta[[c0 for c0 in cols if c0 in alerta.columns]], use_container_width=True)
             else:
-                st.success("Todos os medicamentos estão com estoque adequado.")
-
-            st.dataframe(df, use_container_width=True)
+                st.success("Nenhum medicamento abaixo do estoque mínimo.")
         else:
             st.warning("Nenhum medicamento cadastrado.")
 
@@ -3097,4 +3306,3 @@ elif op == "Gerar PDF":
             )
     else:
         st.warning("Nenhum animal cadastrado ainda.")
-
