@@ -1102,6 +1102,42 @@ def atualizar_farmacia_antiga_para_controle():
 
 
 
+
+# =========================================================
+# FICHA MÉDICA / PRESCRIÇÃO
+# =========================================================
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS fichas_medicas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT
+)
+""")
+
+for col in [
+    "animal", "tipo_animal", "data_atendimento", "motivo",
+    "diagnostico", "tratamento_indicado", "veterinario",
+    "retorno", "status", "custo_total", "obs"
+]:
+    add_col("fichas_medicas", col)
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS ficha_medicacoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT
+)
+""")
+
+for col in [
+    "ficha_id", "animal", "tipo_animal", "medicamento", "quantidade",
+    "unidade", "dosagem", "data_hora", "funcionario", "telefone",
+    "mensagem", "status", "alerta_gerado", "data_alerta",
+    "preco_unitario", "custo_total", "obs"
+]:
+    add_col("ficha_medicacoes", col)
+
+conn.commit()
+
+
+
 # =========================================================
 # SIDEBAR / MENU
 # =========================================================
@@ -2316,16 +2352,20 @@ elif op == "Farmácia":
 
 
 
+
 # =========================================================
 # VETERINÁRIO / TRATAMENTOS
 # =========================================================
 
 elif op == "Veterinário / Tratamentos":
-    titulo_pagina("🩺 Veterinário / Tratamentos", "Atendimentos, diagnósticos, baixa de estoque em mL/L e alerta WhatsApp automático")
+    titulo_pagina(
+        "🩺 Veterinário / Tratamentos",
+        "Ficha médica com prescrição, horários de medicação, baixa de estoque e alertas WhatsApp"
+    )
 
     aba = st.radio(
         "Opção",
-        ["Registrar Tratamento", "Histórico de Tratamentos"],
+        ["Nova Ficha Médica", "Histórico de Fichas", "Medicações Agendadas"],
         horizontal=True
     )
 
@@ -2336,7 +2376,10 @@ elif op == "Veterinário / Tratamentos":
         conn
     )
 
-    if aba == "Registrar Tratamento":
+    # -----------------------------------------------------
+    # NOVA FICHA MÉDICA
+    # -----------------------------------------------------
+    if aba == "Nova Ficha Médica":
         if animais.empty:
             st.warning("Cadastre um animal primeiro.")
         else:
@@ -2346,24 +2389,39 @@ elif op == "Veterinário / Tratamentos":
             animal_nome = escolha.split(" - ")[0]
             animal_tipo = escolha.split(" - ")[1]
 
+            st.markdown("### 1. Dados do atendimento")
+
             col1, col2 = st.columns(2)
 
             with col1:
                 data = st.date_input("Data do atendimento", format="DD/MM/YYYY")
                 motivo = st.text_input("Motivo do atendimento")
                 diagnostico = st.text_area("Diagnóstico")
-                tratamento = st.text_area("Tratamento indicado")
+                tratamento_indicado = st.text_area("Tratamento / conduta geral")
 
             with col2:
-                medicamentos = ["Nenhum"]
-                if not farmacia.empty:
-                    medicamentos += farmacia["medicamento"].dropna().tolist()
+                veterinario = st.text_input("Veterinário / Responsável técnico")
+                retorno = st.date_input("Retorno previsto", format="DD/MM/YYYY")
+                obs_ficha = st.text_area("Observações gerais da ficha")
 
-                medicamento = st.selectbox("Medicamento utilizado", medicamentos)
+            st.markdown("---")
+            st.markdown("### 2. Prescrição / Medicações")
 
+            if "medicacoes_ficha_temp" not in st.session_state:
+                st.session_state.medicacoes_ficha_temp = []
+
+            medicamentos_lista = ["Nenhum"]
+            if not farmacia.empty:
+                medicamentos_lista += farmacia["medicamento"].dropna().tolist()
+
+            colm1, colm2 = st.columns(2)
+
+            with colm1:
+                medicamento = st.selectbox("Medicamento", medicamentos_lista)
+
+                unidade_padrao = "mL"
                 estoque_atual = 0.0
                 preco_unitario = 0.0
-                unidade_padrao = ""
 
                 if medicamento != "Nenhum":
                     med_df = pd.read_sql_query(
@@ -2374,18 +2432,14 @@ elif op == "Veterinário / Tratamentos":
 
                     if not med_df.empty:
                         med_row = med_df.iloc[0]
-
                         unidade_padrao = med_row.get("unidade_controle", "") or med_row.get("unidade", "") or "mL"
 
-                        estoque_convertido = med_row.get("estoque_convertido", "")
-                        preco_por_controle = med_row.get("preco_por_controle", "")
-
-                        if estoque_convertido not in [None, ""]:
-                            estoque_atual = float(estoque_convertido or 0)
-                            preco_unitario = float(preco_por_controle or 0)
+                        if med_row.get("estoque_convertido", "") not in [None, ""]:
+                            estoque_atual = float(med_row.get("estoque_convertido") or 0)
+                            preco_unitario = float(med_row.get("preco_por_controle") or 0)
                         else:
-                            estoque_atual = float(med_row.get("quantidade", 0) or 0)
-                            preco_unitario = float(med_row.get("preco", 0) or 0)
+                            estoque_atual = float(med_row.get("quantidade") or 0)
+                            preco_unitario = float(med_row.get("preco") or 0)
 
                         st.info(
                             (
@@ -2394,168 +2448,328 @@ elif op == "Veterinário / Tratamentos":
                             ).replace(",", "X").replace(".", ",").replace("X", ".")
                         )
 
-                quantidade_usada = st.number_input(
-                    f"Quantidade usada ({unidade_padrao or 'unidade de controle'})",
+                quantidade = st.number_input(
+                    f"Quantidade por aplicação ({unidade_padrao})",
                     min_value=0.0,
                     step=1.0
                 )
+                unidade = st.text_input("Unidade", value=unidade_padrao)
+                dosagem = st.text_input("Dosagem / orientação")
 
-                unidade = st.text_input("Unidade usada", value=unidade_padrao)
-                dosagem = st.text_input("Dosagem / Forma de uso")
-                veterinario = st.text_input("Veterinário / Responsável técnico")
-                retorno = st.date_input("Retorno previsto", format="DD/MM/YYYY")
+            with colm2:
+                data_medicacao = st.date_input("Data da aplicação", value=data, format="DD/MM/YYYY")
+                hora_medicacao = st.time_input("Hora da aplicação")
 
-                custo_total = quantidade_usada * preco_unitario
-                st.metric("Custo estimado do tratamento", moeda(custo_total))
+                funcionario_nome = ""
+                telefone_funcionario = ""
 
-                if medicamento != "Nenhum" and quantidade_usada > estoque_atual:
-                    st.error(
-                        f"Quantidade maior que o estoque disponível ({estoque_atual:,.2f} {unidade_padrao})."
-                        .replace(",", "X").replace(".", ",").replace("X", ".")
-                    )
-
-            st.markdown("---")
-            st.markdown("### 📲 Alerta WhatsApp da medicação")
-
-            gerar_alerta = st.checkbox(
-                "Gerar alerta WhatsApp para funcionário 1 hora antes da medicação",
-                value=True
-            )
-
-            funcionario_nome = ""
-            telefone_funcionario = ""
-
-            col_alerta1, col_alerta2 = st.columns(2)
-
-            with col_alerta1:
-                data_medicacao = st.date_input("Data da medicação", value=data, format="DD/MM/YYYY")
-                hora_medicacao = st.time_input("Hora da medicação")
-
-            with col_alerta2:
                 if funcionarios.empty:
                     st.warning("Cadastre funcionário ativo para gerar alerta WhatsApp.")
                 else:
                     funcionarios["descricao"] = funcionarios["nome"] + " - " + funcionarios["cargo"].fillna("")
-                    escolha_func = st.selectbox("Funcionário responsável pela aplicação", funcionarios["descricao"].tolist())
+                    escolha_func = st.selectbox("Funcionário responsável", funcionarios["descricao"].tolist())
                     funcionario_nome = escolha_func.split(" - ")[0]
                     func = funcionarios[funcionarios["nome"] == funcionario_nome].iloc[0]
                     telefone_funcionario = str(func["telefone"] or "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-                    st.info(f"WhatsApp: {telefone_funcionario}")
 
-            data_hora_medicacao = datetime.combine(data_medicacao, hora_medicacao)
+                custo_item = quantidade * preco_unitario
+                st.metric("Custo desta aplicação", moeda(custo_item))
 
-            mensagem_alerta = (
-                f"Olá, {funcionario_nome}!\\n\\n"
-                f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
-                f"Animal: {animal_nome}\\n"
-                f"Medicamento: {medicamento}\\n"
-                f"Quantidade: {quantidade_usada} {unidade}\\n"
-                f"Dosagem/orientação: {dosagem}\\n"
-                f"Data e hora: {data_hora_medicacao.strftime('%d/%m/%Y %H:%M')}\\n\\n"
-                f"Favor confirmar a aplicação no sistema."
-            )
-
-            st.text_area("Mensagem que será enviada pelo WhatsApp", value=mensagem_alerta, height=160)
-
-            obs = st.text_area("Observações gerais")
-
-            if st.button("Salvar Tratamento e Baixar Estoque"):
-                nova_qtd = estoque_atual
-                if medicamento != "Nenhum":
-                    if quantidade_usada <= 0:
-                        st.error("Informe a quantidade usada do medicamento.")
-                        st.stop()
-
-                    ok, nova_qtd, preco_unitario_final, erro = baixar_estoque(medicamento, quantidade_usada)
-                    if not ok:
-                        st.error(erro)
-                        st.stop()
-
-                    preco_unitario = preco_unitario_final
-                    custo_total = quantidade_usada * preco_unitario_final
-
-                if gerar_alerta and funcionarios.empty:
-                    st.error("Para gerar alerta WhatsApp, cadastre ao menos um funcionário ativo.")
-                    st.stop()
-
-                c.execute("""
-                    INSERT INTO tratamentos
-                    (animal, tipo, data, motivo, diagnostico, tratamento,
-                     medicamento, quantidade_usada, unidade, dosagem,
-                     preco_unitario, custo_total, veterinario, retorno,
-                     funcionario_responsavel, telefone_funcionario,
-                     data_hora_medicacao, gerar_alerta_whatsapp, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    animal_nome, animal_tipo, br_data(data), motivo, diagnostico, tratamento,
-                    medicamento, str(quantidade_usada), unidade, dosagem,
-                    str(preco_unitario), str(custo_total), veterinario, br_data(retorno),
-                    funcionario_nome, telefone_funcionario,
-                    data_hora_medicacao.strftime("%d/%m/%Y %H:%M"),
-                    "Sim" if gerar_alerta else "Não",
-                    obs
-                ))
-
-                if gerar_alerta and medicamento != "Nenhum":
-                    c.execute("""
-                        INSERT INTO medicacoes_agendadas
-                        (animal, tipo_animal, medicamento, dosagem, data_hora,
-                         funcionario, telefone, mensagem, status, alerta_gerado,
-                         data_alerta, obs)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        animal_nome,
-                        animal_tipo,
-                        medicamento,
-                        dosagem,
-                        data_hora_medicacao.strftime("%d/%m/%Y %H:%M"),
-                        funcionario_nome,
-                        telefone_funcionario,
-                        mensagem_alerta,
-                        "Agendada",
-                        "Não",
-                        "",
-                        f"Gerado automaticamente pelo tratamento em {br_data(data)}"
-                    ))
-
-                conn.commit()
-
-                if medicamento != "Nenhum":
-                    st.success(
-                        (
-                            f"Tratamento salvo. Estoque atual: {nova_qtd:,.2f} {unidade}. "
-                            f"Custo do tratamento: {moeda(custo_total)}"
-                        ).replace(",", "X").replace(".", ",").replace("X", ".")
-                    )
+            if st.button("➕ Adicionar medicação à ficha", use_container_width=True):
+                if medicamento == "Nenhum":
+                    st.error("Selecione um medicamento.")
+                elif quantidade <= 0:
+                    st.error("Informe a quantidade.")
                 else:
-                    st.success("Tratamento salvo.")
+                    data_hora_medicacao = datetime.combine(data_medicacao, hora_medicacao)
 
-    elif aba == "Histórico de Tratamentos":
-        df = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", conn)
+                    mensagem_alerta = (
+                        f"Olá, {funcionario_nome}!\\n\\n"
+                        f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
+                        f"Animal: {animal_nome}\\n"
+                        f"Medicamento: {medicamento}\\n"
+                        f"Quantidade: {quantidade} {unidade}\\n"
+                        f"Dosagem/orientação: {dosagem}\\n"
+                        f"Data e hora: {data_hora_medicacao.strftime('%d/%m/%Y %H:%M')}\\n\\n"
+                        f"Favor confirmar a aplicação no sistema."
+                    )
 
-        if not df.empty:
-            col1, col2 = st.columns(2)
+                    st.session_state.medicacoes_ficha_temp.append({
+                        "animal": animal_nome,
+                        "tipo_animal": animal_tipo,
+                        "medicamento": medicamento,
+                        "quantidade": quantidade,
+                        "unidade": unidade,
+                        "dosagem": dosagem,
+                        "data_hora": data_hora_medicacao.strftime("%d/%m/%Y %H:%M"),
+                        "funcionario": funcionario_nome,
+                        "telefone": telefone_funcionario,
+                        "mensagem": mensagem_alerta,
+                        "preco_unitario": preco_unitario,
+                        "custo_total": custo_item
+                    })
+                    st.success("Medicação adicionada à ficha.")
 
-            with col1:
-                filtro = st.selectbox("Filtrar por tipo", ["Todos"] + tipos)
-            with col2:
-                filtro_animal = st.selectbox("Filtrar por animal", ["Todos"] + sorted(df["animal"].dropna().unique().tolist()))
+            if st.session_state.medicacoes_ficha_temp:
+                st.markdown("### 3. Medicações adicionadas")
+                df_temp = pd.DataFrame(st.session_state.medicacoes_ficha_temp)
+                st.dataframe(df_temp, use_container_width=True, hide_index=True)
 
-            if filtro != "Todos":
-                df = df[df["tipo"] == filtro]
-            if filtro_animal != "Todos":
-                df = df[df["animal"] == filtro_animal]
+                custo_total_ficha = sum(float(x.get("custo_total", 0) or 0) for x in st.session_state.medicacoes_ficha_temp)
+                st.metric("Custo total da ficha", moeda(custo_total_ficha))
 
-            st.dataframe(df, use_container_width=True)
+                colsave, colclear = st.columns(2)
+
+                with colclear:
+                    if st.button("🧹 Limpar medicações da ficha", use_container_width=True):
+                        st.session_state.medicacoes_ficha_temp = []
+                        st.rerun()
+
+                with colsave:
+                    if st.button("💾 Salvar Ficha Médica e Baixar Estoque", use_container_width=True):
+                        # Valida estoque antes de salvar
+                        erros_estoque = []
+                        for item in st.session_state.medicacoes_ficha_temp:
+                            med_df = pd.read_sql_query(
+                                "SELECT * FROM farmacia WHERE medicamento = ?",
+                                conn,
+                                params=(item["medicamento"],)
+                            )
+
+                            if med_df.empty:
+                                erros_estoque.append(f"{item['medicamento']}: não encontrado.")
+                            else:
+                                med_row = med_df.iloc[0]
+                                if med_row.get("estoque_convertido", "") not in [None, ""]:
+                                    estoque_disp = float(med_row.get("estoque_convertido") or 0)
+                                else:
+                                    estoque_disp = float(med_row.get("quantidade") or 0)
+
+                                if float(item["quantidade"]) > estoque_disp:
+                                    erros_estoque.append(
+                                        f"{item['medicamento']}: estoque insuficiente. Disponível {estoque_disp} {item['unidade']}."
+                                    )
+
+                        if erros_estoque:
+                            for erro in erros_estoque:
+                                st.error(erro)
+                            st.stop()
+
+                        c.execute("""
+                            INSERT INTO fichas_medicas
+                            (animal, tipo_animal, data_atendimento, motivo,
+                             diagnostico, tratamento_indicado, veterinario,
+                             retorno, status, custo_total, obs)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            animal_nome,
+                            animal_tipo,
+                            br_data(data),
+                            motivo,
+                            diagnostico,
+                            tratamento_indicado,
+                            veterinario,
+                            br_data(retorno),
+                            "Aberta",
+                            str(custo_total_ficha),
+                            obs_ficha
+                        ))
+
+                        ficha_id = c.lastrowid
+
+                        # Salva cada medicação, agenda alerta e baixa estoque
+                        for item in st.session_state.medicacoes_ficha_temp:
+                            ok, nova_qtd, preco_unitario_final, erro = baixar_estoque(
+                                item["medicamento"],
+                                float(item["quantidade"])
+                            )
+
+                            if not ok:
+                                st.error(erro)
+                                st.stop()
+
+                            custo_item_final = float(item["quantidade"]) * float(preco_unitario_final or item["preco_unitario"])
+
+                            c.execute("""
+                                INSERT INTO ficha_medicacoes
+                                (ficha_id, animal, tipo_animal, medicamento, quantidade,
+                                 unidade, dosagem, data_hora, funcionario, telefone,
+                                 mensagem, status, alerta_gerado, data_alerta,
+                                 preco_unitario, custo_total, obs)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(ficha_id),
+                                item["animal"],
+                                item["tipo_animal"],
+                                item["medicamento"],
+                                str(item["quantidade"]),
+                                item["unidade"],
+                                item["dosagem"],
+                                item["data_hora"],
+                                item["funcionario"],
+                                item["telefone"],
+                                item["mensagem"],
+                                "Agendada",
+                                "Não",
+                                "",
+                                str(preco_unitario_final),
+                                str(custo_item_final),
+                                ""
+                            ))
+
+                            c.execute("""
+                                INSERT INTO medicacoes_agendadas
+                                (animal, tipo_animal, medicamento, dosagem, data_hora,
+                                 funcionario, telefone, mensagem, status, alerta_gerado,
+                                 data_alerta, obs)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                item["animal"],
+                                item["tipo_animal"],
+                                item["medicamento"],
+                                f"{item['quantidade']} {item['unidade']} - {item['dosagem']}",
+                                item["data_hora"],
+                                item["funcionario"],
+                                item["telefone"],
+                                item["mensagem"],
+                                "Agendada",
+                                "Não",
+                                "",
+                                f"Ficha médica nº {ficha_id}"
+                            ))
+
+                            # Mantém compatibilidade com histórico antigo
+                            c.execute("""
+                                INSERT INTO tratamentos
+                                (animal, tipo, data, motivo, diagnostico, tratamento,
+                                 medicamento, quantidade_usada, unidade, dosagem,
+                                 preco_unitario, custo_total, veterinario, retorno,
+                                 funcionario_responsavel, telefone_funcionario,
+                                 data_hora_medicacao, gerar_alerta_whatsapp, obs)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                animal_nome,
+                                animal_tipo,
+                                br_data(data),
+                                motivo,
+                                diagnostico,
+                                tratamento_indicado,
+                                item["medicamento"],
+                                str(item["quantidade"]),
+                                item["unidade"],
+                                item["dosagem"],
+                                str(preco_unitario_final),
+                                str(custo_item_final),
+                                veterinario,
+                                br_data(retorno),
+                                item["funcionario"],
+                                item["telefone"],
+                                item["data_hora"],
+                                "Sim",
+                                f"Ficha médica nº {ficha_id}"
+                            ))
+
+                        conn.commit()
+                        st.session_state.medicacoes_ficha_temp = []
+                        st.success(f"Ficha médica nº {ficha_id} salva com sucesso, estoque baixado e alertas agendados.")
+                        st.rerun()
+            else:
+                st.info("Adicione uma ou mais medicações antes de salvar a ficha.")
+
+    # -----------------------------------------------------
+    # HISTÓRICO DE FICHAS
+    # -----------------------------------------------------
+    elif aba == "Histórico de Fichas":
+        fichas = pd.read_sql_query("SELECT * FROM fichas_medicas WHERE animal IS NOT NULL ORDER BY id DESC", conn)
+
+        if fichas.empty:
+            st.warning("Nenhuma ficha médica registrada.")
+        else:
+            st.dataframe(fichas, use_container_width=True, hide_index=True)
+
+            fichas["descricao"] = fichas["id"].astype(str) + " - " + fichas["animal"].fillna("") + " - " + fichas["data_atendimento"].fillna("")
+            escolha = st.selectbox("Abrir detalhe da ficha", fichas["descricao"].tolist())
+            ficha_id = escolha.split(" - ")[0]
+
+            ficha = fichas[fichas["id"].astype(str) == ficha_id].iloc[0]
+            meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE ficha_id = ? ORDER BY data_hora", conn, params=(ficha_id,))
+
+            st.markdown(f"### Ficha médica nº {ficha_id}")
+            st.write(f"**Animal:** {ficha.get('animal', '')}")
+            st.write(f"**Data:** {ficha.get('data_atendimento', '')}")
+            st.write(f"**Motivo:** {ficha.get('motivo', '')}")
+            st.write(f"**Diagnóstico:** {ficha.get('diagnostico', '')}")
+            st.write(f"**Tratamento:** {ficha.get('tratamento_indicado', '')}")
+            st.write(f"**Veterinário:** {ficha.get('veterinario', '')}")
+            st.metric("Custo total da ficha", moeda(float(ficha.get("custo_total") or 0)))
+
+            st.markdown("### Medicações da ficha")
+            if not meds.empty:
+                st.dataframe(meds, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhuma medicação vinculada.")
 
             st.download_button(
-                "📥 Baixar Histórico",
-                data=gerar_excel(df),
-                file_name="historico_tratamentos.xlsx",
+                "📥 Baixar fichas médicas",
+                data=gerar_excel(fichas),
+                file_name="fichas_medicas.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
+    # -----------------------------------------------------
+    # MEDICAÇÕES AGENDADAS
+    # -----------------------------------------------------
+    elif aba == "Medicações Agendadas":
+        meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE medicamento IS NOT NULL ORDER BY data_hora", conn)
+
+        if meds.empty:
+            st.warning("Nenhuma medicação agendada.")
         else:
-            st.warning("Nenhum tratamento registrado.")
+            col1, col2 = st.columns(2)
+            with col1:
+                filtro_status = st.selectbox("Status", ["Todos", "Agendada", "Aplicada", "Cancelada"])
+            with col2:
+                filtro_animal = st.selectbox("Animal", ["Todos"] + sorted(meds["animal"].dropna().unique().tolist()))
+
+            view = meds.copy()
+            if filtro_status != "Todos":
+                view = view[view["status"] == filtro_status]
+            if filtro_animal != "Todos":
+                view = view[view["animal"] == filtro_animal]
+
+            st.dataframe(view, use_container_width=True, hide_index=True)
+
+            if not view.empty:
+                view["descricao"] = view["id"].astype(str) + " - " + view["animal"].fillna("") + " - " + view["medicamento"].fillna("") + " - " + view["data_hora"].fillna("")
+                escolha = st.selectbox("Selecionar medicação", view["descricao"].tolist())
+                med_id = escolha.split(" - ")[0]
+                med = view[view["id"].astype(str) == med_id].iloc[0]
+
+                colb1, colb2 = st.columns(2)
+
+                with colb1:
+                    if st.button("✅ Marcar como aplicada", use_container_width=True):
+                        c.execute("UPDATE ficha_medicacoes SET status = ? WHERE id = ?", ("Aplicada", med_id))
+                        c.execute("""
+                            UPDATE medicacoes_agendadas
+                            SET status = ?
+                            WHERE animal = ? AND medicamento = ? AND data_hora = ?
+                        """, ("Aplicada", med["animal"], med["medicamento"], med["data_hora"]))
+                        conn.commit()
+                        st.success("Medicação marcada como aplicada.")
+                        st.rerun()
+
+                with colb2:
+                    if st.button("🚫 Cancelar medicação", use_container_width=True):
+                        c.execute("UPDATE ficha_medicacoes SET status = ? WHERE id = ?", ("Cancelada", med_id))
+                        c.execute("""
+                            UPDATE medicacoes_agendadas
+                            SET status = ?
+                            WHERE animal = ? AND medicamento = ? AND data_hora = ?
+                        """, ("Cancelada", med["animal"], med["medicamento"], med["data_hora"]))
+                        conn.commit()
+                        st.success("Medicação cancelada.")
+                        st.rerun()
 
 
 # =========================================================
