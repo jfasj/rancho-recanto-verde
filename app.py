@@ -1,4 +1,3 @@
-
 import os
 import re
 import sqlite3
@@ -17,6 +16,59 @@ import pandas as pd
 import streamlit as st
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import unicodedata
+
+
+def _registrar_fonte_pdf():
+    """Registra DejaVuSans (suporta acentos) se disponível, senão usa Helvetica com fallback."""
+    fontes_ttf = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ]
+    for caminho in fontes_ttf:
+        if os.path.exists(caminho):
+            try:
+                if "Bold" in caminho or "Bold" in caminho:
+                    pdfmetrics.registerFont(TTFont("FontePDF-Bold", caminho))
+                else:
+                    pdfmetrics.registerFont(TTFont("FontePDF", caminho))
+            except Exception:
+                pass
+    return "FontePDF" if "FontePDF" in [f.fontName for f in pdfmetrics.getRegisteredFontNames()] else None
+
+
+_FONTE_PDF = None
+
+
+def _init_fonte_pdf():
+    global _FONTE_PDF
+    if _FONTE_PDF is None:
+        _FONTE_PDF = _registrar_fonte_pdf()
+    return _FONTE_PDF
+
+
+def _fonte(bold=False):
+    """Retorna nome da fonte PDF com suporte a acentos se disponível."""
+    nomes = pdfmetrics.getRegisteredFontNames()
+    if bold:
+        return "FontePDF-Bold" if "FontePDF-Bold" in nomes else "Helvetica-Bold"
+    return "FontePDF" if "FontePDF" in nomes else "Helvetica"
+
+
+def _pdf_str(texto):
+    """Converte texto para string segura para PDF (remove chars não suportados)."""
+    if texto is None:
+        return ""
+    texto = str(texto)
+    # Normaliza caracteres unicode compostos
+    texto = unicodedata.normalize("NFC", texto)
+    return texto
 
 
 # =========================================================
@@ -32,7 +84,13 @@ st.set_page_config(
 LOGO = "logo.png"
 DB = "rancho.db"
 
-conn = sqlite3.connect(DB, check_same_thread=False)
+@st.cache_resource
+def get_connection():
+    c = sqlite3.connect(DB, check_same_thread=False)
+    c.execute("PRAGMA journal_mode=WAL")
+    return c
+
+conn = get_connection()
 c = conn.cursor()
 
 
@@ -240,6 +298,17 @@ def hash_senha(senha):
     return hashlib.sha256(str(senha).encode("utf-8")).hexdigest()
 
 
+def _get_secret_early(nome, padrao=""):
+    """Versão antecipada de get_secret_value para uso no boot."""
+    try:
+        if nome in st.secrets:
+            return st.secrets[nome]
+    except Exception:
+        pass
+    import os as _os
+    return _os.environ.get(nome, padrao)
+
+
 def criar_admin_padrao():
     usuarios = pd.read_sql_query("SELECT * FROM usuarios WHERE nome IS NOT NULL AND nome != ''", conn)
     if usuarios.empty:
@@ -248,7 +317,7 @@ def criar_admin_padrao():
             VALUES (?, ?, ?, ?, ?)
         """, (
             "admin",
-            hash_senha("1234"),
+            hash_senha(_get_secret_early("ADMIN_SENHA_INICIAL", "1234")),
             "Administrador",
             "|".join(TODAS_PERMISSOES),
             "Sim"
@@ -290,7 +359,9 @@ def usuario_tem_permissao(pagina):
 
 
 criar_admin_padrao()
-atualizar_admin_permissoes()
+if "admin_perms_atualizadas" not in st.session_state:
+    atualizar_admin_permissoes()
+    st.session_state.admin_perms_atualizadas = True
 
 
 # =========================================================
@@ -1177,7 +1248,6 @@ menu_map = {
 
 if not menu_map:
     st.error("Seu usuário não possui permissões liberadas.")
-    st.stop()
 
 # Estado da navegação
 if "pagina_atual" not in st.session_state or st.session_state.pagina_atual not in menu_map.values():
@@ -1715,12 +1785,10 @@ elif op == "Controle Sanitário":
             if st.button("Salvar e Baixar Estoque"):
                 if quantidade_usada <= 0:
                     st.error("Informe a quantidade usada.")
-                    st.stop()
 
                 ok, nova_qtd, preco_unitario, erro = baixar_estoque(produto, quantidade_usada)
                 if not ok:
                     st.error(erro)
-                    st.stop()
 
                 c.execute("""
                     INSERT INTO sanitario
@@ -2553,7 +2621,6 @@ elif op == "Veterinário / Tratamentos":
                         if erros_estoque:
                             for erro in erros_estoque:
                                 st.error(erro)
-                            st.stop()
 
                         c.execute("""
                             INSERT INTO fichas_medicas
@@ -2586,7 +2653,6 @@ elif op == "Veterinário / Tratamentos":
 
                             if not ok:
                                 st.error(erro)
-                                st.stop()
 
                             custo_item_final = float(item["quantidade"]) * float(preco_unitario_final or item["preco_unitario"])
 
@@ -3046,11 +3112,11 @@ elif op == "Vendas de Animais":
                     pdf.drawImage(LOGO, 140, 700, width=320, height=90, preserveAspectRatio=True, mask="auto")
 
                 y = 660
-                pdf.setFont("Helvetica-Bold", 14)
-                pdf.drawCentredString(largura / 2, y, "CONTRATO DE COMPRA E VENDA DE ANIMAL")
+                pdf.setFont(_fonte(bold=True), 14)
+                pdf.drawCentredString(largura / 2, y, _pdf_str("CONTRATO DE COMPRA E VENDA DE ANIMAL"))
                 y -= 35
 
-                pdf.setFont("Helvetica", 10)
+                pdf.setFont(_fonte(), 10)
                 linhas = [
                     "Pelo presente instrumento particular, as partes ajustam a compra e venda do animal abaixo identificado.",
                     "",
@@ -3088,12 +3154,12 @@ elif op == "Vendas de Animais":
                 ]
 
                 for linha in linhas:
-                    pdf.drawString(50, y, str(linha)[:110])
+                    pdf.drawString(50, y, _pdf_str(str(linha))[:110])
                     y -= 16
                     if y < 60:
                         pdf.showPage()
                         y = 750
-                        pdf.setFont("Helvetica", 10)
+                        pdf.setFont(_fonte(), 10)
 
                 pdf.save()
 
@@ -3586,7 +3652,6 @@ elif op == "Admin / Usuários":
 
     if st.session_state.usuario.get("perfil") != "Administrador":
         st.error("Apenas administradores podem acessar esta área.")
-        st.stop()
 
     aba = st.radio(
         "Opção",
@@ -3613,7 +3678,6 @@ elif op == "Admin / Usuários":
         if st.button("Salvar Usuário"):
             if not nome_usuario or not senha_usuario:
                 st.error("Informe nome e senha.")
-                st.stop()
 
             existente = pd.read_sql_query(
                 "SELECT * FROM usuarios WHERE nome = ?",
@@ -3623,7 +3687,6 @@ elif op == "Admin / Usuários":
 
             if not existente.empty:
                 st.error("Já existe usuário com esse nome.")
-                st.stop()
 
             c.execute("""
                 INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
@@ -3698,7 +3761,6 @@ elif op == "Admin / Usuários":
             if st.button("Alterar Senha"):
                 if not nova_senha:
                     st.error("Informe a nova senha.")
-                    st.stop()
 
                 c.execute(
                     "UPDATE usuarios SET senha_hash = ? WHERE id = ?",
@@ -3727,16 +3789,17 @@ elif op == "Gerar PDF":
         vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal = ?", conn, params=(animal_nome,))
 
         if st.button("Gerar PDF"):
+            _init_fonte_pdf()
             buffer = BytesIO()
             pdf = canvas.Canvas(buffer, pagesize=letter)
 
             if os.path.exists(LOGO):
                 pdf.drawImage(LOGO, 130, 690, width=350, height=100, preserveAspectRatio=True, mask="auto")
 
-            pdf.setFont("Helvetica-Bold", 14)
-            pdf.drawString(50, 650, "FICHA DO ANIMAL")
+            pdf.setFont(_fonte(bold=True), 14)
+            pdf.drawString(50, 650, _pdf_str("FICHA DO ANIMAL"))
 
-            pdf.setFont("Helvetica", 10)
+            pdf.setFont(_fonte(), 10)
             y = 625
 
             dados = [
@@ -3759,7 +3822,7 @@ elif op == "Gerar PDF":
             ]
 
             for titulo, valor in dados:
-                pdf.drawString(50, y, f"{titulo}: {valor if valor else ''}")
+                pdf.drawString(50, y, _pdf_str(f"{titulo}: {valor if valor else ''}"))
                 y -= 15
 
             secoes = [
@@ -3775,21 +3838,21 @@ elif op == "Gerar PDF":
                     pdf.showPage()
                     y = 750
 
-                pdf.setFont("Helvetica-Bold", 13)
-                pdf.drawString(50, y, titulo)
+                pdf.setFont(_fonte(bold=True), 13)
+                pdf.drawString(50, y, _pdf_str(titulo))
                 y -= 20
-                pdf.setFont("Helvetica", 9)
+                pdf.setFont(_fonte(), 9)
 
                 if not df_secao.empty:
                     for _, row in df_secao.iterrows():
-                        pdf.drawString(50, y, formatador(row)[:115])
+                        pdf.drawString(50, y, _pdf_str(formatador(row))[:115])
                         y -= 15
                         if y < 70:
                             pdf.showPage()
                             y = 750
-                            pdf.setFont("Helvetica", 9)
+                            pdf.setFont(_fonte(), 9)
                 else:
-                    pdf.drawString(50, y, "Nenhum registro.")
+                    pdf.drawString(50, y, _pdf_str("Nenhum registro."))
                     y -= 15
 
             pdf.save()
