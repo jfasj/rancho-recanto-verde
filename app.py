@@ -1065,51 +1065,65 @@ def twilio_configurado():
 
 
 def normalizar_whatsapp(numero):
+    """Limpa o numero e adiciona DDI 55 se necessario. Retorna so digitos."""
     numero = str(numero or "")
     numero = numero.replace("+", "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-
-    # Adiciona DDI 55 se não tiver
     if numero and not numero.startswith("55"):
         numero = "55" + numero
-
-    # Celulares brasileiros: 55 + DDD (2) + 9 + número (8) = 13 dígitos
-    # Alguns números chegam sem o 9 extra (11 dígitos com DDI)
-    # Formato correto BR: 5511999999999 (13 dígitos)
-    # Se tiver 12 dígitos (55 + DDD 2 + 8 dígitos), insere o 9 após o DDD
-    if len(numero) == 12 and numero.startswith("55"):
-        ddi = numero[:2]   # "55"
-        ddd = numero[2:4]  # ex: "81"
-        resto = numero[4:] # 8 dígitos
-        numero = ddi + ddd + "9" + resto
-
     return numero
+
+
+def _variantes_numero(numero):
+    """
+    Gera as duas variantes de um numero BR: com e sem o 9 extra.
+    Ex: 558195640909  -> [558195640909, 5581995640909]
+        5581995640909 -> [5581995640909, 558195640909]
+    Assim o envio tenta automaticamente os dois formatos.
+    """
+    numero = normalizar_whatsapp(numero)
+    if not numero:
+        return []
+    variantes = [numero]
+    if len(numero) == 12 and numero.startswith("55"):
+        com_nove = numero[:4] + "9" + numero[4:]
+        variantes.append(com_nove)
+    elif len(numero) == 13 and numero.startswith("55"):
+        sem_nove = numero[:4] + numero[5:]
+        variantes.append(sem_nove)
+    return variantes
 
 
 def enviar_whatsapp_twilio(numero, mensagem):
     if Client is None:
-        return False, "", "Biblioteca twilio não instalada. Inclua twilio no requirements.txt."
+        return False, "", "Biblioteca twilio nao instalada. Inclua twilio no requirements.txt."
 
     sid = get_secret_value("TWILIO_ACCOUNT_SID")
     token = get_secret_value("TWILIO_AUTH_TOKEN")
     from_number = get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 
     if not sid or not token:
-        return False, "", "Credenciais Twilio não configuradas."
+        return False, "", "Credenciais Twilio nao configuradas."
 
-    numero = normalizar_whatsapp(numero)
-    if not numero:
-        return False, "", "Telefone do funcionário não informado."
+    variantes = _variantes_numero(numero)
+    if not variantes:
+        return False, "", "Telefone do funcionario nao informado."
 
-    try:
-        client = Client(sid, token)
-        msg = client.messages.create(
-            body=str(mensagem),
-            from_=from_number,
-            to=f"whatsapp:+{numero}"
-        )
-        return True, msg.sid, ""
-    except Exception as e:
-        return False, "", str(e)
+    client = Client(sid, token)
+    ultimo_erro = ""
+
+    for num in variantes:
+        try:
+            msg = client.messages.create(
+                body=str(mensagem),
+                from_=from_number,
+                to=f"whatsapp:+{num}"
+            )
+            return True, msg.sid, ""
+        except Exception as e:
+            ultimo_erro = str(e)
+            continue
+
+    return False, "", ultimo_erro
 
 
 def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, status, sid_twilio="", erro_twilio="", obs=""):
