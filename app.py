@@ -1,4 +1,3 @@
-
 import os
 import re
 import sqlite3
@@ -1068,8 +1067,21 @@ def twilio_configurado():
 def normalizar_whatsapp(numero):
     numero = str(numero or "")
     numero = numero.replace("+", "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    # Adiciona DDI 55 se não tiver
     if numero and not numero.startswith("55"):
         numero = "55" + numero
+
+    # Celulares brasileiros: 55 + DDD (2) + 9 + número (8) = 13 dígitos
+    # Alguns números chegam sem o 9 extra (11 dígitos com DDI)
+    # Formato correto BR: 5511999999999 (13 dígitos)
+    # Se tiver 12 dígitos (55 + DDD 2 + 8 dígitos), insere o 9 após o DDD
+    if len(numero) == 12 and numero.startswith("55"):
+        ddi = numero[:2]   # "55"
+        ddd = numero[2:4]  # ex: "81"
+        resto = numero[4:] # 8 dígitos
+        numero = ddi + ddd + "9" + resto
+
     return numero
 
 
