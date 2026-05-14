@@ -1,8 +1,13 @@
 import os
 import re
-import sqlite3
 import hashlib
 import xml.etree.ElementTree as ET
+try:
+    import psycopg2
+    import psycopg2.extras
+    _PG_OK = True
+except ImportError:
+    _PG_OK = False
 
 try:
     from twilio.rest import Client
@@ -87,13 +92,48 @@ st.set_page_config(
 )
 
 LOGO = "logo.png"
-DB = "rancho.db"
 
 @st.cache_resource
 def get_connection():
-    c = sqlite3.connect(DB, check_same_thread=False)
-    c.execute("PRAGMA journal_mode=WAL")
-    return c
+    """Conecta ao Supabase via SESSION POOLER (compatível com IPv4/Streamlit Cloud)."""
+    db_url = get_secret_value_early("DATABASE_URL")
+    if not db_url:
+        st.error("DATABASE_URL não configurada nos Secrets do Streamlit.")
+        st.stop()
+    # Session pooler requer sslmode=require e options de pool
+    conn = psycopg2.connect(
+        db_url,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+        sslmode="require",
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+        connect_timeout=10,
+    )
+    conn.autocommit = False
+    return conn
+
+
+def reconectar_se_necessario():
+    """Reconecta ao banco se a conexão cair (comum com session pooler)."""
+    global conn, c
+    try:
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        st.cache_resource.clear()
+        conn = get_connection()
+        c = conn.cursor()
+
+
+def get_secret_value_early(nome, padrao=""):
+    try:
+        if nome in st.secrets:
+            return st.secrets[nome]
+    except Exception:
+        pass
+    return os.environ.get(nome, padrao)
+
 
 conn = get_connection()
 c = conn.cursor()
@@ -104,30 +144,28 @@ c = conn.cursor()
 # =========================================================
 
 TABELAS = [
-    "animais",
-    "farmacia",
-    "sanitario",
-    "tratamentos",
-    "pesagens",
-    "doadoras",
-    "receptoras",
-    "vendas",
-    "recebimentos",
-    "funcionarios",
-    "alertas_whatsapp",
-    "medicacoes_agendadas",
-    "compras_nfe",
-    "abqm_consultas",
-    "usuarios",
+    "animais", "farmacia", "sanitario", "tratamentos", "pesagens",
+    "doadoras", "receptoras", "vendas", "recebimentos", "funcionarios",
+    "alertas_whatsapp", "medicacoes_agendadas", "compras_nfe",
+    "abqm_consultas", "usuarios",
 ]
 
 for tabela in TABELAS:
-    c.execute(f"CREATE TABLE IF NOT EXISTS {tabela} (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS {tabela} (
+            id SERIAL PRIMARY KEY
+        )
+    """)
+
+conn.commit()
 
 
 def add_col(tabela, coluna, tipo="TEXT"):
-    cols = pd.read_sql_query(f"PRAGMA table_info({tabela})", conn)["name"].tolist()
-    if coluna not in cols:
+    c.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = %s AND column_name = %s
+    """, (tabela, coluna))
+    if not c.fetchone():
         c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
         
 for col in [
@@ -319,7 +357,7 @@ def criar_admin_padrao():
     if usuarios.empty:
         c.execute("""
             INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
         """, (
             "admin",
             hash_senha(_get_secret_early("ADMIN_SENHA_INICIAL", "1234")),
@@ -334,8 +372,8 @@ def criar_admin_padrao():
 def atualizar_admin_permissoes():
     c.execute("""
         UPDATE usuarios
-        SET permissoes = ?, perfil = ?, ativo = ?
-        WHERE nome = ?
+        SET permissoes = %s, perfil = %s, ativo = %s
+        WHERE nome = %s
     """, (
         "|".join(TODAS_PERMISSOES),
         "Administrador",
@@ -375,377 +413,366 @@ if "admin_perms_atualizadas" not in st.session_state:
 
 st.markdown("""
 <style>
+/* ============================================================
+   RANCHO RECANTO VERDE — Design System v2
+   Paleta extraída da logomarca oficial
+   ============================================================ */
 :root {
-    --bg: #07111f;
-    --panel: #101d2c;
-    --panel2: #142235;
-    --gold: #d4af37;
-    --gold2: #b8860b;
-    --text: #f8fafc;
-    --muted: #cbd5e1;
-    --line: rgba(212,175,55,0.25);
-    --red: #ef4444;
-    --green: #22c55e;
+    /* Cores base da logomarca */
+    --bg:        #06101e;   /* azul-marinho profundo */
+    --panel:     #0d1b2a;   /* painel primário */
+    --panel2:    #112036;   /* painel secundário */
+    --panel3:    #162840;   /* painel terciário / hover */
+
+    /* Dourado da logomarca */
+    --gold:      #c9a84c;   /* champagne metálico principal */
+    --gold-l:    #e8c96d;   /* dourado claro / destaque */
+    --gold-d:    #9a7a2e;   /* dourado escuro / sombra */
+    --gold-bg:   rgba(201,168,76,0.10);
+    --gold-line: rgba(201,168,76,0.22);
+
+    /* Verde do "Recanto Verde" */
+    --green-brand: #4a9e6b;
+    --green-light: #5dbe82;
+    --green-bg:    rgba(74,158,107,0.12);
+
+    /* Semânticas */
+    --red:    #e05252;
+    --green:  #3db86a;
+    --yellow: #e8b84b;
+    --blue:   #4a8fcf;
+
+    /* Texto */
+    --text:   #f0f4f8;
+    --muted:  #8fa3b8;
+    --hint:   #4a6278;
+    --line:   rgba(201,168,76,0.18);
 }
 
+/* ── Fundo global ── */
 .stApp {
-    background:
-        radial-gradient(circle at top center, rgba(212,175,55,0.07), transparent 35%),
-        linear-gradient(135deg, #07111f 0%, #0b1320 55%, #07111f 100%);
+    background: #06101e;
     color: var(--text);
 }
 
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #081526 0%, #101827 100%);
-    border-right: 1px solid rgba(212,175,55,0.35);
+    background: linear-gradient(180deg, #08131f 0%, #0d1b2a 100%);
+    border-right: 1px solid var(--gold-line);
+}
+[data-testid="stSidebar"] * { color: var(--text) !important; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    background: rgba(13,27,42,0.8);
+    border: 1px solid var(--gold-line);
+    border-radius: 12px;
+    padding: 9px 12px;
+    margin: 3px 0;
+    transition: all .15s;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: var(--gold-bg);
+    border-color: rgba(201,168,76,0.4);
+}
+[data-testid="stSidebar"] [role="radiogroup"] label[data-testid="stMarkdownContainer"] p {
+    font-weight: 600 !important;
 }
 
-[data-testid="stSidebar"] * {
-    color: #f8fafc;
-}
+/* ── Tipografia ── */
+h1, h2, h3 { color: var(--text); }
+label, p, span { color: var(--text); }
+hr { border: none; border-top: 1px solid var(--line); }
 
-h1, h2, h3 {
-    color: var(--text);
-}
-
-label, p, span {
-    color: var(--text);
-}
-
-hr {
-    border: none;
-    border-top: 1px solid var(--line);
-}
-
+/* ── Métricas ── */
 div[data-testid="stMetric"] {
-    background: linear-gradient(135deg, rgba(21,33,52,0.98), rgba(13,25,41,0.98));
-    border: 1px solid rgba(212,175,55,0.16);
-    border-radius: 18px;
-    padding: 18px;
-    box-shadow: 0 14px 36px rgba(0,0,0,0.28);
+    background: var(--panel);
+    border: 1px solid var(--gold-line);
+    border-radius: 16px;
+    padding: 16px 18px;
 }
+div[data-testid="stMetricLabel"] { color: var(--muted) !important; font-size: 0.85rem; }
+div[data-testid="stMetricValue"] { color: var(--text) !important; font-weight: 700; }
+div[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
 
-div[data-testid="stMetricLabel"] {
-    color: #cbd5e1 !important;
-    font-size: 0.88rem;
-}
-
-div[data-testid="stMetricValue"] {
-    color: #ffffff !important;
-    font-weight: 800;
-}
-
+/* ── Botões ── */
 .stButton button,
 .stDownloadButton button {
-    background: linear-gradient(135deg, #b8860b, #d4af37);
-    color: #07111f !important;
+    background: linear-gradient(135deg, var(--gold-d), var(--gold));
+    color: #06101e !important;
     border-radius: 12px;
-    font-weight: 800;
+    font-weight: 700;
     border: none;
-    padding: 0.65rem 1rem;
+    padding: 0.6rem 1.1rem;
+    transition: all .18s;
 }
-
 .stButton button:hover,
 .stDownloadButton button:hover {
-    background: linear-gradient(135deg, #d4af37, #f4d36a);
-    color: #07111f !important;
+    background: linear-gradient(135deg, var(--gold), var(--gold-l));
+    transform: translateY(-1px);
 }
 
-.card {
-    background: linear-gradient(135deg, rgba(20,34,53,0.98), rgba(13,26,42,0.98));
-    border: 1px solid rgba(212,175,55,0.16);
-    border-radius: 18px;
-    padding: 18px;
-    box-shadow: 0 14px 36px rgba(0,0,0,0.28);
-    min-height: 110px;
-}
-
-.card-title {
-    font-size: 0.82rem;
-    color: #cbd5e1;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-}
-
-.card-value {
-    font-size: 1.85rem;
-    font-weight: 900;
-    color: #fff;
-    margin-top: 5px;
-}
-
-.card-sub {
-    font-size: 0.88rem;
-    color: #cbd5e1;
-    margin-top: 5px;
-}
-
-.icon-box {
-    width: 52px;
-    height: 52px;
+/* Botões em colunas (menu de abas) */
+div[data-testid="column"] .stButton button {
+    min-height: 52px;
+    font-size: 1rem;
     border-radius: 14px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.8rem;
-    margin-right: 12px;
-    background: linear-gradient(135deg, rgba(212,175,55,0.45), rgba(184,134,11,0.25));
-    box-shadow: inset 0 0 18px rgba(255,255,255,0.07);
+    border: 1px solid var(--gold-line) !important;
+    background: var(--panel) !important;
+    color: var(--text) !important;
+}
+div[data-testid="column"] .stButton button:hover {
+    background: linear-gradient(135deg, var(--gold-d), var(--gold)) !important;
+    color: #06101e !important;
+    border-color: var(--gold) !important;
 }
 
+/* ── Inputs ── */
+input, textarea {
+    background-color: var(--panel2) !important;
+    color: var(--text) !important;
+    border-color: var(--gold-line) !important;
+    border-radius: 10px !important;
+}
+input:focus, textarea:focus {
+    border-color: var(--gold) !important;
+    box-shadow: 0 0 0 2px rgba(201,168,76,0.15) !important;
+}
+div[data-baseweb="select"] > div {
+    background-color: var(--panel2);
+    border-radius: 10px;
+    border-color: var(--gold-line);
+}
+
+/* ── DataFrames ── */
+[data-testid="stDataFrame"] {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--gold-line);
+}
+
+/* ── Cards de dashboard ── */
+.card {
+    background: var(--panel);
+    border: 1px solid var(--gold-line);
+    border-radius: 16px;
+    padding: 18px;
+    min-height: 100px;
+    transition: border-color .2s;
+}
+.card:hover { border-color: rgba(201,168,76,0.45); }
+.card-title {
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+.card-value {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 4px;
+}
+.card-sub { font-size: 0.84rem; color: var(--muted); margin-top: 4px; }
+.card-value.gold { color: var(--gold); }
+.card-value.green { color: var(--green-brand); }
+.card-value.red { color: var(--red); }
+
+/* ── Grid de módulos (home) ── */
+.app-grid-card {
+    background: var(--panel);
+    border: 1px solid var(--gold-line);
+    border-radius: 20px;
+    padding: 20px 14px;
+    min-height: 135px;
+    text-align: center;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: all .18s;
+}
+.app-grid-card:hover {
+    border-color: var(--gold);
+    background: var(--panel2);
+    transform: translateY(-2px);
+}
+.app-grid-icon { font-size: 2.2rem; margin-bottom: 8px; }
+.app-grid-title { font-size: 0.98rem; font-weight: 700; color: var(--text); }
+.app-grid-subtitle { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+
+/* ── Badge de status ── */
+.badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
+}
+.badge-ok      { background: var(--green-bg);           color: var(--green-brand); }
+.badge-warn    { background: rgba(232,184,75,0.14);     color: var(--yellow); }
+.badge-danger  { background: rgba(224,82,82,0.14);      color: var(--red); }
+.badge-info    { background: rgba(74,143,207,0.14);     color: var(--blue); }
+.badge-gold    { background: var(--gold-bg);            color: var(--gold); }
+
+/* ── Topbar ── */
 .topbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: rgba(10,22,36,0.86);
-    border: 1px solid rgba(212,175,55,0.18);
-    border-radius: 18px;
+    background: var(--panel);
+    border: 1px solid var(--gold-line);
+    border-radius: 16px;
     padding: 12px 16px;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
 }
+.topbar-title { font-weight: 800; color: var(--text); font-size: 1rem; }
+.topbar-menu  { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.topbar-title {
-    font-weight: 900;
-    color: #fff;
-    font-size: 1.05rem;
-}
-
-.topbar-menu {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
+/* ── Pills / chips ── */
 .pill {
-    border: 1px solid rgba(212,175,55,0.25);
+    border: 1px solid var(--gold-line);
     border-radius: 999px;
-    padding: 8px 12px;
-    background: rgba(212,175,55,0.08);
-    color: #f8fafc;
-    font-weight: 700;
+    padding: 6px 12px;
+    background: var(--gold-bg);
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.88rem;
 }
 
-.section-title {
-    font-size: 1.45rem;
-    font-weight: 900;
-    margin: 10px 0 4px 0;
-}
+/* ── Seção títulos ── */
+.section-title    { font-size: 1.35rem; font-weight: 800; margin: 8px 0 4px; }
+.section-subtitle { color: var(--muted); margin-bottom: 18px; font-size: 0.9rem; }
 
-.section-subtitle {
-    color: #cbd5e1;
-    margin-bottom: 22px;
-}
+/* ── Quick title (dashboard) ── */
+.quick-title    { font-size: 1.45rem; font-weight: 800; color: var(--text); margin-bottom: 2px; }
+.quick-subtitle { color: var(--muted); margin-bottom: 18px; font-size: 0.9rem; }
 
+/* ── Alert card ── */
 .alert-card {
-    background: rgba(15, 28, 45, 0.96);
-    border: 1px solid rgba(212,175,55,0.16);
-    border-radius: 18px;
+    background: var(--panel);
+    border: 1px solid var(--gold-line);
+    border-radius: 16px;
     padding: 16px;
-    min-height: 250px;
+    min-height: 240px;
 }
 
+/* ── Icon box ── */
+.icon-box {
+    width: 48px; height: 48px;
+    border-radius: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.7rem;
+    margin-right: 10px;
+    background: var(--gold-bg);
+    border: 1px solid var(--gold-line);
+}
+
+/* ── Footer ── */
 .footer {
     text-align: center;
-    color: #cbd5e1;
-    padding: 20px 0 5px 0;
+    color: var(--hint);
+    padding: 18px 0 4px;
+    font-size: 0.85rem;
+    border-top: 1px solid var(--line);
+    margin-top: 24px;
+}
+
+/* ── Linha separadora dourada ── */
+.gold-divider {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    border: none;
+    margin: 16px 0;
+    border-radius: 999px;
+}
+
+/* ── Tag de perfil (sidebar) ── */
+.perfil-tag {
+    display: inline-block;
+    background: var(--gold-bg);
+    border: 1px solid var(--gold-line);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 0.78rem;
+    color: var(--gold);
+    font-weight: 700;
+    margin-top: 4px;
+}
+
+/* ── Linha de info (animais, farmácia) ── */
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
     font-size: 0.9rem;
 }
+.info-row:last-child { border-bottom: none; }
+.info-label { color: var(--muted); }
+.info-value { color: var(--text); font-weight: 600; }
 
-[data-testid="stDataFrame"] {
-    border-radius: 16px;
-    overflow: hidden;
-}
-
-div[data-baseweb="select"] > div {
-    background-color: rgba(20,34,53,0.98);
-    border-radius: 12px;
-    border-color: rgba(212,175,55,0.25);
-}
-
-input, textarea {
-    background-color: rgba(20,34,53,0.98) !important;
-    color: #f8fafc !important;
-}
-
-
-[data-testid="stSidebar"] [role="radiogroup"] label {
-    background: rgba(15, 28, 45, 0.72);
-    border: 1px solid rgba(212,175,55,0.12);
-    border-radius: 12px;
-    padding: 8px 10px;
-    margin: 4px 0;
-}
-[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-    background: rgba(212,175,55,0.16);
-    border-color: rgba(212,175,55,0.35);
-}
-
-
-/* Botões do menu superior */
-div[data-testid="column"] .stButton button {
-    min-height: 56px;
-    font-size: 1.08rem;
-    border-radius: 16px;
-    border: 1px solid rgba(212,175,55,0.28);
-    background: linear-gradient(135deg, rgba(21,33,52,0.98), rgba(13,26,42,0.98));
-    color: #f8fafc !important;
-    box-shadow: 0 10px 28px rgba(0,0,0,0.22);
-}
-div[data-testid="column"] .stButton button:hover {
-    background: linear-gradient(135deg, #b8860b, #d4af37);
-    color: #07111f !important;
-    border-color: rgba(212,175,55,0.9);
-}
-
-
-/* HOME ESTILO APP PROFISSIONAL */
-.app-grid-card {
-    background: linear-gradient(135deg, rgba(20,34,53,0.98), rgba(10,22,36,0.98));
-    border: 1px solid rgba(212,175,55,0.22);
-    border-radius: 22px;
-    padding: 22px;
-    min-height: 145px;
-    box-shadow: 0 16px 36px rgba(0,0,0,0.30);
-    text-align: center;
-    margin-bottom: 14px;
-}
-.app-grid-icon {
-    font-size: 2.4rem;
-    margin-bottom: 8px;
-}
-.app-grid-title {
-    font-size: 1.05rem;
-    font-weight: 900;
-    color: #ffffff;
-}
-.app-grid-subtitle {
-    font-size: 0.86rem;
-    color: #cbd5e1;
-    margin-top: 5px;
-}
-.quick-title {
-    font-size: 1.55rem;
-    font-weight: 900;
-    color: #ffffff;
-    margin-bottom: 2px;
-}
-.quick-subtitle {
-    color: #cbd5e1;
-    margin-bottom: 22px;
-}
+/* ── Green brand accent (verde do logo) ── */
+.accent-green { color: var(--green-brand) !important; }
+.accent-gold  { color: var(--gold) !important; }
 
 /* ============================================================
    RESPONSIVO MOBILE — telas até 768px
    ============================================================ */
 @media (max-width: 768px) {
-
-    /* Sidebar colapsa por padrão no mobile */
     [data-testid="stSidebar"] {
         min-width: 0 !important;
         width: 0 !important;
     }
     [data-testid="stSidebar"][aria-expanded="true"] {
-        width: 80vw !important;
-        min-width: 220px !important;
+        width: 82vw !important;
+        min-width: 240px !important;
         position: fixed !important;
         z-index: 9999 !important;
         height: 100vh !important;
         top: 0 !important;
         left: 0 !important;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.5) !important;
     }
-
-    /* Conteúdo principal ocupa toda a largura */
     .main .block-container {
-        padding: 0.5rem 0.6rem 1rem !important;
+        padding: 0.5rem 0.6rem 5rem !important;
         max-width: 100% !important;
     }
-
-    /* Colunas empilham verticalmente */
     div[data-testid="column"] {
         width: 100% !important;
         flex: 1 1 100% !important;
         min-width: 100% !important;
     }
-
-    /* Cards menores no mobile */
-    .card {
-        padding: 12px !important;
-        min-height: 80px !important;
-    }
-
-    /* Topbar simplificada */
-    .topbar {
-        flex-direction: column !important;
-        gap: 8px !important;
-        padding: 10px !important;
-    }
-    .topbar-menu {
-        display: none !important;
-    }
-
-    /* App grid cards — 2 por linha no mobile */
-    .app-grid-card {
-        padding: 14px !important;
-        min-height: 110px !important;
-        border-radius: 14px !important;
-    }
-    .app-grid-icon { font-size: 1.8rem !important; }
-    .app-grid-title { font-size: 0.92rem !important; }
-
-    /* Seção título menor */
-    .section-title { font-size: 1.15rem !important; }
-
-    /* Botões de ação maiores (mais fácil de tocar) */
-    .stButton button,
-    .stDownloadButton button {
+    .card { padding: 12px !important; min-height: 80px !important; }
+    .topbar { flex-direction: column !important; gap: 6px !important; padding: 10px !important; }
+    .topbar-menu { display: none !important; }
+    .app-grid-card { padding: 14px 10px !important; min-height: 110px !important; border-radius: 14px !important; }
+    .app-grid-icon { font-size: 1.7rem !important; }
+    .app-grid-title { font-size: 0.88rem !important; }
+    .section-title { font-size: 1.1rem !important; }
+    .stButton button, .stDownloadButton button {
         min-height: 48px !important;
         font-size: 1rem !important;
     }
-
-    /* Formulários: campos full width */
     div[data-testid="stTextInput"],
     div[data-testid="stTextArea"],
     div[data-testid="stSelectbox"],
     div[data-testid="stNumberInput"],
-    div[data-testid="stDateInput"] {
-        width: 100% !important;
-    }
-
-    /* Tabelas com scroll horizontal */
-    [data-testid="stDataFrame"] {
-        overflow-x: auto !important;
-        max-width: 100vw !important;
-    }
-
-    /* Métricas em linha */
-    div[data-testid="stMetric"] {
-        padding: 12px !important;
-        border-radius: 12px !important;
-    }
-
-    /* Radio buttons (menus de abas) empilham */
-    div[role="radiogroup"] {
-        flex-direction: column !important;
-    }
-    div[role="radiogroup"] label {
-        width: 100% !important;
-    }
-
-    /* Login centralizado */
-    .stTextInput input {
-        font-size: 16px !important;
-    }
+    div[data-testid="stDateInput"] { width: 100% !important; }
+    [data-testid="stDataFrame"] { overflow-x: auto !important; max-width: 100vw !important; }
+    div[data-testid="stMetric"] { padding: 12px !important; border-radius: 12px !important; }
+    div[role="radiogroup"] { flex-direction: column !important; }
+    div[role="radiogroup"] label { width: 100% !important; min-height: 48px !important; }
+    .stTextInput input { font-size: 16px !important; }
+    .card-value { font-size: 1.5rem !important; }
 }
 
-/* Telas muito pequenas (< 400px — celulares antigos) */
 @media (max-width: 400px) {
-    .main .block-container {
-        padding: 0.3rem 0.4rem 0.8rem !important;
-    }
+    .main .block-container { padding: 0.3rem 0.4rem 5rem !important; }
     .section-title { font-size: 1rem !important; }
-    .card-value { font-size: 1.4rem !important; }
+    .card-value { font-size: 1.3rem !important; }
+    .app-grid-card { padding: 10px 6px !important; }
 }
-
 
 </style>
 """, unsafe_allow_html=True)
@@ -833,8 +860,8 @@ def baixar_estoque(medicamento, quantidade_usada):
 
         c.execute("""
             UPDATE farmacia
-            SET estoque_convertido = ?
-            WHERE medicamento = ?
+            SET estoque_convertido = %s
+            WHERE medicamento = %s
         """, (str(novo_estoque), medicamento))
 
         conn.commit()
@@ -850,8 +877,8 @@ def baixar_estoque(medicamento, quantidade_usada):
 
     c.execute("""
         UPDATE farmacia
-        SET quantidade = ?
-        WHERE medicamento = ?
+        SET quantidade = %s
+        WHERE medicamento = %s
     """, (str(novo_estoque), medicamento))
 
     conn.commit()
@@ -908,10 +935,15 @@ if not st.session_state.logado:
     with col_login2:
         if os.path.exists(LOGO):
             st.image(LOGO, use_container_width=True)
-
-        st.markdown("### 🔐 Acesso ao Sistema")
-        nome_login = st.text_input("Usuário")
-        senha_login = st.text_input("Senha", type="password")
+        st.markdown("""
+<div style='text-align:center;margin:-8px 0 20px'>
+  <span style='font-size:0.75rem;color:#4a9e6b;font-weight:700;letter-spacing:0.12em;text-transform:uppercase'>Sistema de Gestão do Haras</span>
+</div>
+<div style='background:#0d1b2a;border:1px solid rgba(201,168,76,0.22);border-radius:18px;padding:20px 16px;margin-bottom:4px'>
+  <div style='font-size:1rem;font-weight:700;color:#f0f4f8;margin-bottom:16px'>🔒 Acesso ao Sistema</div>
+""", unsafe_allow_html=True)
+        nome_login = st.text_input("Usuário", placeholder="Digite seu usuário")
+        senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
 
         if st.button("Entrar", use_container_width=True):
             usuario = carregar_usuario(nome_login)
@@ -924,6 +956,7 @@ if not st.session_state.logado:
             else:
                 st.error("Usuário ou senha inválidos.")
 
+        st.markdown('</div>', unsafe_allow_html=True)
         st.info("Acesso inicial: usuário **admin** | senha **1234**. Altere depois em Admin / Usuários.")
 
     st.stop()
@@ -1130,7 +1163,7 @@ def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, stat
     c.execute("""
         INSERT INTO alertas_whatsapp
         (funcionario, telefone, tipo_alerta, mensagem, data_envio, status, sid_twilio, erro_twilio, obs)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         funcionario,
         telefone,
@@ -1180,8 +1213,8 @@ def verificar_e_disparar_alertas_auto():
         if ok:
             c.execute("""
                 UPDATE medicacoes_agendadas
-                SET alerta_gerado = ?, data_alerta = ?, sid_twilio = ?, erro_twilio = ?
-                WHERE id = ?
+                SET alerta_gerado = %s, data_alerta = %s, sid_twilio = %s, erro_twilio = %s
+                WHERE id = %s
             """, ("Sim", agora.strftime("%d/%m/%Y %H:%M"), sid, "", str(row["id"])))
             registrar_alerta_whatsapp(
                 row["funcionario"], row["telefone"], "Medicação 1h antes (auto)",
@@ -1311,12 +1344,12 @@ def recalcular_farmacia_por_descricao(somente_volume_igual_1=True):
 
         c.execute("""
             UPDATE farmacia
-            SET volume_por_unidade = ?,
-                unidade_controle = ?,
-                estoque_convertido = ?,
-                quantidade_compra = ?,
-                preco_por_controle = ?
-            WHERE id = ?
+            SET volume_por_unidade = %s,
+                unidade_controle = %s,
+                estoque_convertido = %s,
+                quantidade_compra = %s,
+                preco_por_controle = %s
+            WHERE id = %s
         """, (
             str(volume_extraido),
             unidade_controle,
@@ -1360,14 +1393,14 @@ def atualizar_farmacia_antiga_para_controle():
 
             c.execute("""
                 UPDATE farmacia
-                SET quantidade_compra = ?,
-                    unidade_compra = ?,
-                    volume_por_unidade = ?,
-                    unidade_controle = ?,
-                    estoque_convertido = ?,
-                    estoque_min_controle = ?,
-                    preco_por_controle = ?
-                WHERE id = ?
+                SET quantidade_compra = %s,
+                    unidade_compra = %s,
+                    volume_por_unidade = %s,
+                    unidade_controle = %s,
+                    estoque_convertido = %s,
+                    estoque_min_controle = %s,
+                    preco_por_controle = %s
+                WHERE id = %s
             """, (
                 str(quantidade_compra),
                 unidade_compra,
@@ -1391,7 +1424,7 @@ def atualizar_farmacia_antiga_para_controle():
 
 c.execute("""
 CREATE TABLE IF NOT EXISTS fichas_medicas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT
+    id SERIAL PRIMARY KEY
 )
 """)
 
@@ -1404,7 +1437,7 @@ for col in [
 
 c.execute("""
 CREATE TABLE IF NOT EXISTS ficha_medicacoes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT
+    id SERIAL PRIMARY KEY
 )
 """)
 
@@ -1430,7 +1463,22 @@ with st.sidebar:
     else:
         st.markdown("### Rancho Recanto Verde")
 
-    st.markdown("#### Menu")
+    # Divider dourado
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(201,168,76,0.25);margin:6px 0 10px">', unsafe_allow_html=True)
+
+    # Info do usuário logado
+    if "usuario" in st.session_state and st.session_state.usuario:
+        _nome_u = st.session_state.usuario.get("nome", "").upper()
+        _perfil_u = st.session_state.usuario.get("perfil", "")
+        st.markdown(f"""
+<div style='padding:2px 0 12px'>
+  <div style='font-size:0.68rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.08em'>Logado como</div>
+  <div style='font-size:0.92rem;font-weight:700;color:#f0f4f8;margin-top:2px'>{_nome_u}</div>
+  <div style='display:inline-block;background:rgba(201,168,76,0.12);border:1px solid rgba(201,168,76,0.25);border-radius:999px;padding:2px 10px;font-size:0.68rem;color:#c9a84c;font-weight:700;margin-top:4px'>{_perfil_u}</div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown('<div style="font-size:0.7rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Menu</div>', unsafe_allow_html=True)
 
 menu_map_total = {
     "🏠 Dashboard": "Dashboard",
@@ -1556,10 +1604,21 @@ if op == "Dashboard":
         receptoras["status_parto"] = receptoras["previsao_parto"].apply(lambda x: status_data(x, 30))
         partos_proximos = len(receptoras[receptoras["status_parto"].isin(["VENCIDO", "PRÓXIMO"])])
 
-    st.markdown('<div class="quick-title">🐎 Rancho Recanto Verde</div>', unsafe_allow_html=True)
-    st.markdown('<div class="quick-subtitle">Organização completa do haras na palma da mão</div>', unsafe_allow_html=True)
-
-    st.markdown("### Acesso rápido")
+    st.markdown("""
+<div style='display:flex;align-items:center;gap:12px;margin-bottom:18px'>
+  <div style='width:5px;height:44px;border-radius:99px;background:linear-gradient(180deg,#c9a84c,#4a9e6b);flex-shrink:0'></div>
+  <div>
+    <div class='quick-title' style='margin:0'>Rancho Recanto Verde</div>
+    <div class='quick-subtitle' style='margin:0'>Organização completa do haras na palma da mão</div>
+  </div>
+</div>
+<div style='height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.4),rgba(74,158,107,0.3),transparent);margin-bottom:18px'></div>
+""", unsafe_allow_html=True)
+    st.markdown("""
+<div style='font-size:0.72rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;margin-bottom:10px'>
+  ⚡ Acesso rápido
+</div>
+""", unsafe_allow_html=True)
 
     linha1 = st.columns(4)
     atalhos = [
@@ -1603,8 +1662,14 @@ if op == "Dashboard":
                 st.session_state.pagina_atual = pagina
                 st.rerun()
 
-    st.markdown("---")
-    st.markdown("### Resumo do haras")
+    st.markdown("""
+<div style='margin:20px 0 14px'>
+  <div style='height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.35),transparent);margin-bottom:16px'></div>
+  <div style='font-size:0.72rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.1em;font-weight:700'>
+    📊 Resumo do haras
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1719,7 +1784,7 @@ elif op == "Cadastrar Animal":
              registro_abqm, nome_oficial_abqm, pai_abqm, mae_abqm,
              criador_abqm, proprietario_abqm, link_abqm, obs_abqm,
              obs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             nome, tipo, especie, raca, sexo, br_data(nascimento), cor,
             responsavel, cpf, telefone, local, microchip, status_animal,
@@ -1843,13 +1908,13 @@ elif op == "Animais por Tipo":
                 if st.button("💾 Salvar Alterações do Animal", use_container_width=True):
                     c.execute("""
                         UPDATE animais
-                        SET nome = ?, tipo = ?, especie = ?, raca = ?, sexo = ?,
-                            nascimento = ?, cor = ?, responsavel = ?, cpf = ?,
-                            telefone = ?, local = ?, microchip = ?, status = ?,
-                            registro_abqm = ?, nome_oficial_abqm = ?, pai_abqm = ?,
-                            mae_abqm = ?, criador_abqm = ?, proprietario_abqm = ?,
-                            link_abqm = ?, obs_abqm = ?, obs = ?
-                        WHERE id = ?
+                        SET nome = %s, tipo = %s, especie = %s, raca = %s, sexo = %s,
+                            nascimento = %s, cor = %s, responsavel = %s, cpf = %s,
+                            telefone = %s, local = %s, microchip = %s, status = %s,
+                            registro_abqm = %s, nome_oficial_abqm = %s, pai_abqm = %s,
+                            mae_abqm = %s, criador_abqm = %s, proprietario_abqm = %s,
+                            link_abqm = %s, obs_abqm = %s, obs = %s
+                        WHERE id = %s
                     """, (
                         nome, tipo, especie, raca, sexo,
                         nascimento_txt, cor, responsavel, cpf,
@@ -1867,7 +1932,7 @@ elif op == "Animais por Tipo":
                 confirmar = st.checkbox("Confirmar exclusão deste animal")
                 if st.button("🗑️ Excluir Animal", use_container_width=True):
                     if confirmar:
-                        c.execute("DELETE FROM animais WHERE id = ?", (animal_id,))
+                        c.execute("DELETE FROM animais WHERE id = %s", (animal_id,))
                         conn.commit()
                         st.success("Animal excluído com sucesso!")
                         st.rerun()
@@ -1902,7 +1967,7 @@ elif op == "Pesagem / Evolução":
             if st.button("Salvar Pesagem"):
                 c.execute("""
                     INSERT INTO pesagens (animal, tipo, data_pesagem, peso, obs)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, (animal_nome, animal_tipo, br_data(data_pesagem), str(peso), obs))
                 conn.commit()
                 st.success("Pesagem registrada com sucesso!")
@@ -2005,7 +2070,7 @@ elif op == "Controle Sanitário":
                     INSERT INTO sanitario
                     (animal, tipo, procedimento, produto, data_aplicacao, proxima_dose,
                      quantidade_usada, unidade, preco_unitario, custo_total, responsavel, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     animal_nome, animal_tipo, procedimento, produto, br_data(data_aplicacao),
                     br_data(proxima_dose), str(quantidade_usada), unidade,
@@ -2115,10 +2180,10 @@ elif op == "Consulta ABQM":
             if st.button("Salvar dados ABQM no animal"):
                 c.execute("""
                     UPDATE animais
-                    SET registro_abqm = ?, nome_oficial_abqm = ?, pai_abqm = ?,
-                        mae_abqm = ?, criador_abqm = ?, proprietario_abqm = ?,
-                        link_abqm = ?, obs_abqm = ?
-                    WHERE nome = ?
+                    SET registro_abqm = %s, nome_oficial_abqm = %s, pai_abqm = %s,
+                        mae_abqm = %s, criador_abqm = %s, proprietario_abqm = %s,
+                        link_abqm = %s, obs_abqm = %s
+                    WHERE nome = %s
                 """, (
                     registro_abqm, nome_oficial, pai, mae, criador,
                     proprietario, link_consulta, observacoes, animal_nome
@@ -2129,7 +2194,7 @@ elif op == "Consulta ABQM":
                     (animal, registro_abqm, nome_oficial, pai, mae,
                      pelagem, nascimento, criador, proprietario,
                      link_consulta, observacoes, data_cadastro)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     animal_nome, registro_abqm, nome_oficial, pai, mae,
                     pelagem, nascimento, criador, proprietario,
@@ -2265,7 +2330,7 @@ elif op == "Importar NF-e / XML":
                                  quantidade_compra, unidade_compra, volume_por_unidade,
                                  unidade_controle, estoque_convertido, estoque_min_controle,
                                  preco_por_controle)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
                                 produto_nome,
                                 categoria,
@@ -2311,16 +2376,16 @@ elif op == "Importar NF-e / XML":
 
                             c.execute("""
                                 UPDATE farmacia
-                                SET quantidade = ?,
-                                    preco = ?,
-                                    fornecedor = ?,
-                                    quantidade_compra = ?,
-                                    unidade_compra = ?,
-                                    volume_por_unidade = ?,
-                                    unidade_controle = ?,
-                                    estoque_convertido = ?,
-                                    preco_por_controle = ?
-                                WHERE medicamento = ?
+                                SET quantidade = %s,
+                                    preco = %s,
+                                    fornecedor = %s,
+                                    quantidade_compra = %s,
+                                    unidade_compra = %s,
+                                    volume_por_unidade = %s,
+                                    unidade_controle = %s,
+                                    estoque_convertido = %s,
+                                    preco_por_controle = %s
+                                WHERE medicamento = %s
                             """, (
                                 str(nova_qtd),
                                 str(novo_preco_total),
@@ -2340,7 +2405,7 @@ elif op == "Importar NF-e / XML":
                             (chave_nfe, numero_nfe, data_emissao, fornecedor,
                              cnpj_fornecedor, produto, ncm, quantidade, unidade,
                              valor_unitario, valor_total, data_importacao)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """, (
                             dados_nfe["chave_nfe"],
                             dados_nfe["numero_nfe"],
@@ -2437,7 +2502,7 @@ elif op == "Farmácia":
                  obs, estoque_min, preco, quantidade_compra, unidade_compra,
                  volume_por_unidade, unidade_controle, estoque_convertido,
                  estoque_min_controle, preco_por_controle)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 medicamento, categoria, str(quantidade_compra), unidade_compra, br_data(validade),
                 fornecedor, obs, str(estoque_min_controle), str(preco_total),
@@ -2554,8 +2619,8 @@ elif op == "Farmácia":
                     vol, un = extrair_volume_descricao(medicamento)
                     c.execute("""
                         UPDATE farmacia
-                        SET volume_por_unidade = ?, unidade_controle = ?
-                        WHERE id = ?
+                        SET volume_por_unidade = %s, unidade_controle = %s
+                        WHERE id = %s
                     """, (str(vol), un, str(med_id)))
                     conn.commit()
                     st.success(f"Volume identificado: {vol} {un}.")
@@ -2581,13 +2646,13 @@ elif op == "Farmácia":
                 if st.button("💾 Salvar Alterações do Medicamento", use_container_width=True):
                     c.execute("""
                         UPDATE farmacia
-                        SET medicamento = ?, categoria = ?, quantidade = ?, unidade = ?,
-                            validade = ?, fornecedor = ?, obs = ?, estoque_min = ?,
-                            preco = ?, quantidade_compra = ?, unidade_compra = ?,
-                            volume_por_unidade = ?, unidade_controle = ?,
-                            estoque_convertido = ?, estoque_min_controle = ?,
-                            preco_por_controle = ?
-                        WHERE id = ?
+                        SET medicamento = %s, categoria = %s, quantidade = %s, unidade = %s,
+                            validade = %s, fornecedor = %s, obs = %s, estoque_min = %s,
+                            preco = %s, quantidade_compra = %s, unidade_compra = %s,
+                            volume_por_unidade = %s, unidade_controle = %s,
+                            estoque_convertido = %s, estoque_min_controle = %s,
+                            preco_por_controle = %s
+                        WHERE id = %s
                     """, (
                         medicamento, categoria, str(quantidade_compra), unidade_compra,
                         validade, fornecedor, obs, str(estoque_min_controle),
@@ -2604,7 +2669,7 @@ elif op == "Farmácia":
                 confirmar = st.checkbox("Confirmar exclusão deste medicamento")
                 if st.button("🗑️ Excluir Medicamento", use_container_width=True):
                     if confirmar:
-                        c.execute("DELETE FROM farmacia WHERE id = ?", (med_id,))
+                        c.execute("DELETE FROM farmacia WHERE id = %s", (med_id,))
                         conn.commit()
                         st.success("Medicamento excluído com sucesso!")
                         st.rerun()
@@ -2838,7 +2903,7 @@ elif op == "Veterinário / Tratamentos":
                             (animal, tipo_animal, data_atendimento, motivo,
                              diagnostico, tratamento_indicado, veterinario,
                              retorno, status, custo_total, obs)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """, (
                             animal_nome,
                             animal_tipo,
@@ -2873,7 +2938,7 @@ elif op == "Veterinário / Tratamentos":
                                  unidade, dosagem, data_hora, funcionario, telefone,
                                  mensagem, status, alerta_gerado, data_alerta,
                                  preco_unitario, custo_total, obs)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
                                 str(ficha_id),
                                 item["animal"],
@@ -2899,7 +2964,7 @@ elif op == "Veterinário / Tratamentos":
                                 (animal, tipo_animal, medicamento, dosagem, data_hora,
                                  funcionario, telefone, mensagem, status, alerta_gerado,
                                  data_alerta, obs)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
                                 item["animal"],
                                 item["tipo_animal"],
@@ -2923,7 +2988,7 @@ elif op == "Veterinário / Tratamentos":
                                  preco_unitario, custo_total, veterinario, retorno,
                                  funcionario_responsavel, telefone_funcionario,
                                  data_hora_medicacao, gerar_alerta_whatsapp, obs)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
                                 animal_nome,
                                 animal_tipo,
@@ -3026,11 +3091,11 @@ elif op == "Veterinário / Tratamentos":
 
                 with colb1:
                     if st.button("✅ Marcar como aplicada", use_container_width=True):
-                        c.execute("UPDATE ficha_medicacoes SET status = ? WHERE id = ?", ("Aplicada", med_id))
+                        c.execute("UPDATE ficha_medicacoes SET status = %s WHERE id = %s", ("Aplicada", med_id))
                         c.execute("""
                             UPDATE medicacoes_agendadas
-                            SET status = ?
-                            WHERE animal = ? AND medicamento = ? AND data_hora = ?
+                            SET status = %s
+                            WHERE animal = %s AND medicamento = %s AND data_hora = %s
                         """, ("Aplicada", med["animal"], med["medicamento"], med["data_hora"]))
                         conn.commit()
                         st.success("Medicação marcada como aplicada.")
@@ -3038,11 +3103,11 @@ elif op == "Veterinário / Tratamentos":
 
                 with colb2:
                     if st.button("🚫 Cancelar medicação", use_container_width=True):
-                        c.execute("UPDATE ficha_medicacoes SET status = ? WHERE id = ?", ("Cancelada", med_id))
+                        c.execute("UPDATE ficha_medicacoes SET status = %s WHERE id = %s", ("Cancelada", med_id))
                         c.execute("""
                             UPDATE medicacoes_agendadas
-                            SET status = ?
-                            WHERE animal = ? AND medicamento = ? AND data_hora = ?
+                            SET status = %s
+                            WHERE animal = %s AND medicamento = %s AND data_hora = %s
                         """, ("Cancelada", med["animal"], med["medicamento"], med["data_hora"]))
                         conn.commit()
                         st.success("Medicação cancelada.")
@@ -3091,7 +3156,7 @@ elif op == "Reprodução / Embriões":
                     (egua_doadora, garanhao, data_inseminacao, protocolo, dosagens,
                      data_prevista_lavagem, data_lavagem, resultado_lavagem,
                      embrioes_coletados, status, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     egua, garanhao, br_data(data_inseminacao), protocolo, dosagens,
                     br_data(data_prevista_lavagem), br_data(data_lavagem),
@@ -3132,7 +3197,7 @@ elif op == "Reprodução / Embriões":
                     INSERT INTO receptoras
                     (receptora, egua_doadora, garanhao, cruzamento, data_transferencia,
                      dosagens, protocolo, previsao_parto, confirmacao_prenhez, status, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     receptora, doadora, garanhao, cruzamento, br_data(data_transferencia),
                     dosagens, protocolo, br_data(previsao_parto),
@@ -3230,7 +3295,7 @@ elif op == "Vendas de Animais":
                      forma_pagamento, parcelas, status_venda, comprador_nome,
                      comprador_cpf_cnpj, comprador_telefone, comprador_email,
                      comprador_endereco, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     animal_nome, animal_tipo, br_data(data_venda), str(valor_negociado),
                     str(desconto), str(valor_final), forma_pagamento, str(parcelas),
@@ -3248,14 +3313,14 @@ elif op == "Vendas de Animais":
                         INSERT INTO recebimentos
                         (venda_id, animal, comprador, parcela, vencimento, valor,
                          data_pagamento, status, obs)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         str(venda_id), animal_nome, comprador_nome, str(i),
                         br_data(venc), str(valor_parcela), "", "Em aberto", ""
                     ))
 
                 if status_venda == "Vendido":
-                    c.execute("UPDATE animais SET status = ? WHERE nome = ?", ("Vendido", animal_nome))
+                    c.execute("UPDATE animais SET status = %s WHERE nome = %s", ("Vendido", animal_nome))
 
                 conn.commit()
                 st.success("Venda salva e parcelas geradas com sucesso!")
@@ -3281,8 +3346,8 @@ elif op == "Vendas de Animais":
             if st.button("Marcar como Pago"):
                 c.execute("""
                     UPDATE recebimentos
-                    SET status = ?, data_pagamento = ?, obs = ?
-                    WHERE id = ?
+                    SET status = %s, data_pagamento = %s, obs = %s
+                    WHERE id = %s
                 """, ("Pago", br_data(data_pagamento), obs, parcela_id))
                 conn.commit()
                 st.success("Parcela marcada como paga.")
@@ -3420,7 +3485,7 @@ elif op == "Funcionários":
                 INSERT INTO funcionarios
                 (nome, cpf, rg, telefone, email, endereco, cargo, setor,
                  salario, data_admissao, status, documentos, obs)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 nome, cpf, rg, telefone, email, endereco, cargo, setor,
                 str(salario), br_data(data_admissao), status, documentos, obs
@@ -3519,10 +3584,10 @@ elif op == "Funcionários":
                 if st.button("💾 Salvar Alterações do Funcionário", use_container_width=True):
                     c.execute("""
                         UPDATE funcionarios
-                        SET nome = ?, cpf = ?, rg = ?, telefone = ?, email = ?,
-                            endereco = ?, cargo = ?, setor = ?, salario = ?,
-                            data_admissao = ?, status = ?, documentos = ?, obs = ?
-                        WHERE id = ?
+                        SET nome = %s, cpf = %s, rg = %s, telefone = %s, email = %s,
+                            endereco = %s, cargo = %s, setor = %s, salario = %s,
+                            data_admissao = %s, status = %s, documentos = %s, obs = %s
+                        WHERE id = %s
                     """, (
                         nome, cpf, rg, telefone, email,
                         endereco, cargo, setor, str(salario),
@@ -3537,7 +3602,7 @@ elif op == "Funcionários":
                 confirmar = st.checkbox("Confirmar exclusão deste funcionário")
                 if st.button("🗑️ Excluir Funcionário", use_container_width=True):
                     if confirmar:
-                        c.execute("DELETE FROM funcionarios WHERE id = ?", (funcionario_id,))
+                        c.execute("DELETE FROM funcionarios WHERE id = %s", (funcionario_id,))
                         conn.commit()
                         st.success("Funcionário excluído com sucesso!")
                         st.rerun()
@@ -3733,7 +3798,7 @@ jobs:
                     (animal, tipo_animal, medicamento, dosagem, data_hora,
                      funcionario, telefone, mensagem, status, alerta_gerado,
                      data_alerta, sid_twilio, erro_twilio, obs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     animal_nome, tipo_animal, medicamento, dosagem,
                     data_hora.strftime("%d/%m/%Y %H:%M"),
@@ -3786,8 +3851,8 @@ jobs:
                             if ok:
                                 c.execute("""
                                     UPDATE medicacoes_agendadas
-                                    SET alerta_gerado = ?, data_alerta = ?, sid_twilio = ?, erro_twilio = ?
-                                    WHERE id = ?
+                                    SET alerta_gerado = %s, data_alerta = %s, sid_twilio = %s, erro_twilio = %s
+                                    WHERE id = %s
                                 """, ("Sim", datetime.now().strftime("%d/%m/%Y %H:%M"), sid, "", str(row["id"])))
 
                                 registrar_alerta_whatsapp(
@@ -3799,7 +3864,7 @@ jobs:
                                 st.success("Mensagem enviada pelo Twilio!")
                                 st.rerun()
                             else:
-                                c.execute("UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = ?", (erro, str(row["id"])))
+                                c.execute("UPDATE medicacoes_agendadas SET erro_twilio = %s WHERE id = %s", (erro, str(row["id"])))
                                 conn.commit()
                                 registrar_alerta_whatsapp(
                                     row["funcionario"], row["telefone"], "Medicação 1h antes",
@@ -3810,7 +3875,7 @@ jobs:
                                 st.error(f"Erro ao enviar: {erro}")
 
                         if st.button("Marcar medicação como aplicada", key=f"aplicada_{row['id']}", use_container_width=True):
-                            c.execute("UPDATE medicacoes_agendadas SET status = ? WHERE id = ?", ("Aplicada", str(row["id"])))
+                            c.execute("UPDATE medicacoes_agendadas SET status = %s WHERE id = %s", ("Aplicada", str(row["id"])))
                             conn.commit()
                             st.success("Medicação marcada como aplicada.")
                             st.rerun()
@@ -3994,7 +4059,7 @@ elif op == "Admin / Usuários":
 
             c.execute("""
                 INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
                 nome_usuario,
                 hash_senha(senha_usuario),
@@ -4041,8 +4106,8 @@ elif op == "Admin / Usuários":
             if st.button("Atualizar Permissões"):
                 c.execute("""
                     UPDATE usuarios
-                    SET perfil = ?, permissoes = ?, ativo = ?
-                    WHERE id = ?
+                    SET perfil = %s, permissoes = %s, ativo = %s
+                    WHERE id = %s
                 """, (
                     novo_perfil,
                     "|".join(novas_permissoes),
