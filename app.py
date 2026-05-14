@@ -93,6 +93,15 @@ st.set_page_config(
 
 LOGO = "logo.png"
 
+def get_secret_value_early(nome, padrao=""):
+    try:
+        if nome in st.secrets:
+            return st.secrets[nome]
+    except Exception:
+        pass
+    return os.environ.get(nome, padrao)
+
+
 @st.cache_resource
 def get_connection():
     """Conecta ao Supabase via SESSION POOLER (compatível com IPv4/Streamlit Cloud)."""
@@ -100,7 +109,6 @@ def get_connection():
     if not db_url:
         st.error("DATABASE_URL não configurada nos Secrets do Streamlit.")
         st.stop()
-    # Session pooler requer sslmode=require e options de pool
     conn = psycopg2.connect(
         db_url,
         cursor_factory=psycopg2.extras.RealDictCursor,
@@ -124,15 +132,6 @@ def reconectar_se_necessario():
         st.cache_resource.clear()
         conn = get_connection()
         c = conn.cursor()
-
-
-def get_secret_value_early(nome, padrao=""):
-    try:
-        if nome in st.secrets:
-            return st.secrets[nome]
-    except Exception:
-        pass
-    return os.environ.get(nome, padrao)
 
 
 conn = get_connection()
