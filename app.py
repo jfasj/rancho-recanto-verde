@@ -1,3 +1,4 @@
+
 import os
 import re
 import sqlite3
@@ -14,6 +15,11 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+try:
+    from streamlit_autorefresh import st_autorefresh
+    _AUTOREFRESH_OK = True
+except ImportError:
+    _AUTOREFRESH_OK = False
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
@@ -629,6 +635,119 @@ div[data-testid="column"] .stButton button:hover {
     margin-bottom: 22px;
 }
 
+/* ============================================================
+   RESPONSIVO MOBILE — telas até 768px
+   ============================================================ */
+@media (max-width: 768px) {
+
+    /* Sidebar colapsa por padrão no mobile */
+    [data-testid="stSidebar"] {
+        min-width: 0 !important;
+        width: 0 !important;
+    }
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        width: 80vw !important;
+        min-width: 220px !important;
+        position: fixed !important;
+        z-index: 9999 !important;
+        height: 100vh !important;
+        top: 0 !important;
+        left: 0 !important;
+    }
+
+    /* Conteúdo principal ocupa toda a largura */
+    .main .block-container {
+        padding: 0.5rem 0.6rem 1rem !important;
+        max-width: 100% !important;
+    }
+
+    /* Colunas empilham verticalmente */
+    div[data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+    }
+
+    /* Cards menores no mobile */
+    .card {
+        padding: 12px !important;
+        min-height: 80px !important;
+    }
+
+    /* Topbar simplificada */
+    .topbar {
+        flex-direction: column !important;
+        gap: 8px !important;
+        padding: 10px !important;
+    }
+    .topbar-menu {
+        display: none !important;
+    }
+
+    /* App grid cards — 2 por linha no mobile */
+    .app-grid-card {
+        padding: 14px !important;
+        min-height: 110px !important;
+        border-radius: 14px !important;
+    }
+    .app-grid-icon { font-size: 1.8rem !important; }
+    .app-grid-title { font-size: 0.92rem !important; }
+
+    /* Seção título menor */
+    .section-title { font-size: 1.15rem !important; }
+
+    /* Botões de ação maiores (mais fácil de tocar) */
+    .stButton button,
+    .stDownloadButton button {
+        min-height: 48px !important;
+        font-size: 1rem !important;
+    }
+
+    /* Formulários: campos full width */
+    div[data-testid="stTextInput"],
+    div[data-testid="stTextArea"],
+    div[data-testid="stSelectbox"],
+    div[data-testid="stNumberInput"],
+    div[data-testid="stDateInput"] {
+        width: 100% !important;
+    }
+
+    /* Tabelas com scroll horizontal */
+    [data-testid="stDataFrame"] {
+        overflow-x: auto !important;
+        max-width: 100vw !important;
+    }
+
+    /* Métricas em linha */
+    div[data-testid="stMetric"] {
+        padding: 12px !important;
+        border-radius: 12px !important;
+    }
+
+    /* Radio buttons (menus de abas) empilham */
+    div[role="radiogroup"] {
+        flex-direction: column !important;
+    }
+    div[role="radiogroup"] label {
+        width: 100% !important;
+    }
+
+    /* Login centralizado */
+    .stTextInput input {
+        font-size: 16px !important;
+    }
+}
+
+/* Telas muito pequenas (< 400px — celulares antigos) */
+@media (max-width: 400px) {
+    .main .block-container {
+        padding: 0.3rem 0.4rem 0.8rem !important;
+    }
+    .section-title { font-size: 1rem !important; }
+    .card-value { font-size: 1.4rem !important; }
+}
+
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -811,6 +930,17 @@ if not st.session_state.logado:
     st.stop()
 
 
+# ── Autorefresh: verifica alertas a cada 5 min enquanto o app estiver aberto ──
+if _AUTOREFRESH_OK:
+    _refresh_count = st_autorefresh(interval=5 * 60 * 1000, key="alert_autorefresh")
+    if _refresh_count > 0:
+        _enviados_auto = verificar_e_disparar_alertas_auto()
+        if _enviados_auto > 0:
+            st.toast(f"✅ {_enviados_auto} alerta(s) WhatsApp enviado(s) automaticamente!", icon="📲")
+else:
+    st.sidebar.caption("⚠️ Instale streamlit-autorefresh para alertas automáticos.")
+
+
 def topbar():
     st.markdown(
         """
@@ -987,6 +1117,61 @@ def registrar_alerta_whatsapp(funcionario, telefone, tipo_alerta, mensagem, stat
         obs
     ))
     conn.commit()
+
+
+def verificar_e_disparar_alertas_auto():
+    """
+    Verifica medicações agendadas dentro da janela de 1 hora e envia
+    via Twilio automaticamente se ainda não foram enviadas.
+    Deve ser chamada a cada ciclo do autorefresh.
+    """
+    if not twilio_configurado():
+        return 0
+
+    try:
+        df = pd.read_sql_query(
+            "SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada' AND alerta_gerado = 'Não'",
+            conn
+        )
+    except Exception:
+        return 0
+
+    if df.empty:
+        return 0
+
+    agora = datetime.now()
+    limite = agora + timedelta(hours=1)
+    df["data_hora_dt"] = pd.to_datetime(df["data_hora"], format="%d/%m/%Y %H:%M", errors="coerce")
+    pendentes = df[
+        (df["data_hora_dt"].notna()) &
+        (df["data_hora_dt"] >= agora) &
+        (df["data_hora_dt"] <= limite)
+    ]
+
+    enviados = 0
+    for _, row in pendentes.iterrows():
+        ok, sid, erro = enviar_whatsapp_twilio(row["telefone"], row["mensagem"])
+        if ok:
+            c.execute("""
+                UPDATE medicacoes_agendadas
+                SET alerta_gerado = ?, data_alerta = ?, sid_twilio = ?, erro_twilio = ?
+                WHERE id = ?
+            """, ("Sim", agora.strftime("%d/%m/%Y %H:%M"), sid, "", str(row["id"])))
+            registrar_alerta_whatsapp(
+                row["funcionario"], row["telefone"], "Medicação 1h antes (auto)",
+                row["mensagem"], "Enviado via Twilio (automático)",
+                sid_twilio=sid,
+                obs=f"Animal: {row['animal']} | Medicamento: {row['medicamento']}"
+            )
+            enviados += 1
+        else:
+            c.execute(
+                "UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = ?",
+                (erro, str(row["id"]))
+            )
+        conn.commit()
+
+    return enviados
 
 
 
@@ -2552,13 +2737,13 @@ elif op == "Veterinário / Tratamentos":
                     data_hora_medicacao = datetime.combine(data_medicacao, hora_medicacao)
 
                     mensagem_alerta = (
-                        f"Olá, {funcionario_nome}!\\n\\n"
-                        f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
-                        f"Animal: {animal_nome}\\n"
-                        f"Medicamento: {medicamento}\\n"
-                        f"Quantidade: {quantidade} {unidade}\\n"
-                        f"Dosagem/orientação: {dosagem}\\n"
-                        f"Data e hora: {data_hora_medicacao.strftime('%d/%m/%Y %H:%M')}\\n\\n"
+                        f"Olá, {funcionario_nome}!\n\n"
+                        f"🚨 Lembrete de medicação - Rancho Recanto Verde\n\n"
+                        f"Animal: {animal_nome}\n"
+                        f"Medicamento: {medicamento}\n"
+                        f"Quantidade: {quantidade} {unidade}\n"
+                        f"Dosagem/orientação: {dosagem}\n"
+                        f"Data e hora: {data_hora_medicacao.strftime('%d/%m/%Y %H:%M')}\n\n"
                         f"Favor confirmar a aplicação no sistema."
                     )
 
@@ -3360,18 +3545,111 @@ elif op == "Alertas WhatsApp":
     )
 
     if aba == "Configuração Twilio":
-        st.markdown("### Configuração Twilio")
-        st.info("No Streamlit Cloud, vá em Manage app > Settings > Secrets e cadastre as variáveis abaixo.")
-        st.code("""
-TWILIO_ACCOUNT_SID = "cole_seu_account_sid"
-TWILIO_AUTH_TOKEN = "cole_seu_auth_token"
-TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"
+        st.markdown("### ⚙️ Configuração Twilio / WhatsApp Business")
+
+        # ── Status atual ──────────────────────────────────────────────
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            st.metric("Biblioteca Twilio", "✅ Instalada" if Client is not None else "❌ Não instalada")
+        with col_s2:
+            st.metric("Credenciais", "✅ Configuradas" if twilio_configurado() else "❌ Não configuradas")
+        with col_s3:
+            numero_from = get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+            sandbox = "+14155238886" in numero_from
+            st.metric("Modo", "🧪 Sandbox" if sandbox else "✅ Número real")
+
+        st.markdown("---")
+
+        # ── Passo a passo ─────────────────────────────────────────────
+        st.markdown("### 📋 Como configurar — passo a passo")
+
+        with st.expander("🧪 MODO SANDBOX (grátis para testar)", expanded=not twilio_configurado()):
+            st.markdown("""
+**Use para testar sem custo. Limitação: cada funcionário precisa se cadastrar manualmente.**
+
+1. Acesse [twilio.com](https://www.twilio.com) e crie uma conta gratuita
+2. No console Twilio, vá em **Messaging → Try it out → Send a WhatsApp message**
+3. Cada funcionário deve enviar a mensagem **`join <código-do-sandbox>`** para o número **+1 (415) 523-8886**
+4. Configure os secrets no Streamlit Cloud (**Manage app → Settings → Secrets**):
 """)
-        st.markdown("### Status atual")
-        st.write("Twilio instalado:", "Sim" if Client is not None else "Não")
-        st.write("Credenciais configuradas:", "Sim" if twilio_configurado() else "Não")
-        st.write("Número de origem:", get_secret_value("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886"))
-        st.caption("No Sandbox, cada funcionário precisa enviar o código join para o número da Twilio antes de receber mensagens.")
+            st.code("""TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TWILIO_AUTH_TOKEN  = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"
+ADMIN_SENHA_INICIAL = "suasenhasegura"
+""")
+            st.caption("Account SID e Auth Token estão na página principal do console Twilio.")
+
+        with st.expander("✅ NÚMERO REAL (produção — recomendado)", expanded=False):
+            st.markdown("""
+**Para uso definitivo. Funcionários recebem sem precisar se cadastrar no sandbox.**
+
+**Opção A — Número Twilio dedicado** (mais simples):
+1. No console Twilio, vá em **Phone Numbers → Buy a number**
+2. Escolha um número com suporte a WhatsApp
+3. Vá em **Messaging → Senders → WhatsApp Senders** e ative o número
+4. Atualize o secret:
+""")
+            st.code('TWILIO_WHATSAPP_FROM = "whatsapp:+55119XXXXXXXX"  # seu número Twilio')
+            st.markdown("""
+**Opção B — Seu próprio número de WhatsApp Business** (mais profissional):
+1. Crie uma conta no [Meta Business Manager](https://business.facebook.com)
+2. Configure o **WhatsApp Business API** com seu número
+3. Em **Twilio → Messaging → Senders → WhatsApp Senders**, conecte o número do Meta
+4. Crie templates de mensagem aprovados pelo Meta (obrigatório para mensagens ativas)
+5. Use o SID do template no campo `content_sid` da API Twilio
+""")
+            st.warning("Mensagens ativas (enviadas pelo sistema, não pelo usuário) exigem template aprovado pelo Meta. O processo de aprovação leva 1-3 dias.")
+
+        with st.expander("🔔 Alertas automáticos (autorefresh)", expanded=False):
+            st.markdown("""
+**O sistema verifica automaticamente medicações a vencer a cada 5 minutos, enquanto o app estiver aberto no navegador.**
+
+Para funcionar:
+- Adicione `streamlit-autorefresh` no **requirements.txt** do seu repositório GitHub
+- Configure as credenciais Twilio acima
+- Deixe o app aberto em algum dispositivo (celular do admin, tablet no rancho, etc.)
+
+Para alertas 100% automáticos (sem ninguém com o app aberto), use **GitHub Actions**:
+""")
+            st.code("""# .github/workflows/alertas.yml
+name: Alertas WhatsApp
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # a cada 30 minutos
+jobs:
+  alertas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: pip install twilio pandas
+      - run: python scripts/enviar_alertas.py
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
+""")
+            st.caption("Este workflow roda no GitHub sem custo (até 2000 minutos/mês no plano gratuito).")
+
+        st.markdown("---")
+
+        # ── Teste de envio ────────────────────────────────────────────
+        st.markdown("### 🧪 Testar envio agora")
+        if twilio_configurado():
+            tel_teste = st.text_input("Número para teste (com DDD, ex: 87991234567)")
+            msg_teste = st.text_area("Mensagem de teste", value="✅ Teste do sistema Rancho Recanto Verde. Twilio funcionando!")
+            if st.button("📲 Enviar mensagem de teste", use_container_width=True):
+                if tel_teste:
+                    ok, sid, erro = enviar_whatsapp_twilio(tel_teste, msg_teste)
+                    if ok:
+                        st.success(f"✅ Enviado com sucesso! SID: {sid}")
+                    else:
+                        st.error(f"❌ Erro: {erro}")
+                        if "sandbox" in erro.lower() or "unverified" in erro.lower() or "channel" in erro.lower():
+                            st.info("💡 No sandbox, o destinatário precisa enviar 'join <código>' para o número Twilio antes de receber mensagens.")
+                else:
+                    st.warning("Informe um número para teste.")
+        else:
+            st.info("Configure as credenciais Twilio nos Secrets do Streamlit Cloud para habilitar o teste.")
 
     elif aba == "Agendar Medicação":
         st.markdown("### Agendar medicação com alerta 1 hora antes")
@@ -3412,12 +3690,12 @@ TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"
             data_hora = datetime.combine(data_aplicacao, hora_aplicacao)
 
             mensagem = (
-                f"Olá, {funcionario_nome}!\\n\\n"
-                f"🚨 Lembrete de medicação - Rancho Recanto Verde\\n\\n"
-                f"Animal: {animal_nome}\\n"
-                f"Medicamento: {medicamento}\\n"
-                f"Dosagem/orientação: {dosagem}\\n"
-                f"Data e hora: {data_hora.strftime('%d/%m/%Y %H:%M')}\\n\\n"
+                f"Olá, {funcionario_nome}!\n\n"
+                f"🚨 Lembrete de medicação - Rancho Recanto Verde\n\n"
+                f"Animal: {animal_nome}\n"
+                f"Medicamento: {medicamento}\n"
+                f"Dosagem/orientação: {dosagem}\n"
+                f"Data e hora: {data_hora.strftime('%d/%m/%Y %H:%M')}\n\n"
                 f"Favor confirmar a aplicação no sistema."
             )
 
