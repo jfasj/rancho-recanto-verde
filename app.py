@@ -2929,28 +2929,36 @@ elif op == "Consulta ABQM":
                             dados[campo] = val
 
             # ── Nome oficial e registro (primeira linha: NOME - PXXXXXX) ──
-            for linha in linhas[:5]:
-                m = _re.match(r'^(.+?)\s*[-–]\s*([P]?\d+)\s*$', linha)
+            # Normaliza espaços múltiplos antes de tentar extrair
+            linhas_norm = [_re.sub(r'\s+', ' ', l).strip() for l in linhas]
+
+            for linha in linhas_norm[:8]:
+                # Padrão: "NOME DO ANIMAL - P367119" ou "NOME - 1234567"
+                m = _re.match(r'^(.+?)\s*[-–]\s*([P]?\d{4,})\s*$', linha)
                 if m:
                     dados["nome_oficial"] = m.group(1).strip()
                     dados["registro_abqm"] = m.group(2).strip()
                     break
 
+            # Usa linhas normalizadas daqui em diante também
+            linhas = linhas_norm
+
             # ── Filiação: PAI x MÃE REGISTRO ──
             for linha in linhas:
                 if linha.startswith("Filiação:"):
                     fil = linha.replace("Filiação:", "").strip()
+                    fil = _re.sub(r'\s+', ' ', fil)  # normaliza espaços
                     # Divide em pai e mãe pelo " x " ou " X "
                     partes = _re.split(r'\s+[xX]\s+', fil, maxsplit=1)
                     if len(partes) == 2:
-                        dados["pai"] = partes[0].strip()
+                        dados["pai"] = _re.sub(r'\s+', ' ', partes[0].strip())
                         # Mãe pode ter registro no final: "NOME PXXXXXX"
                         mae_m = _re.match(r'^(.+?)\s+([P]?\d{4,})\s*$', partes[1].strip())
                         if mae_m:
-                            dados["mae"] = mae_m.group(1).strip()
+                            dados["mae"] = _re.sub(r'\s+', ' ', mae_m.group(1).strip())
                             dados["reg_mae"] = mae_m.group(2).strip()
                         else:
-                            dados["mae"] = partes[1].strip()
+                            dados["mae"] = _re.sub(r'\s+', ' ', partes[1].strip())
                     break
 
             # ── Árvore genealógica — bloco após "MARCAS E SINAIS" ──
@@ -2998,7 +3006,7 @@ elif op == "Consulta ABQM":
                                 i += 1
                         else:
                             i += 1
-                        pares.append((nome, reg))
+                        pares.append((_re.sub(r"\s+", " ", nome).strip(), reg))
                     else:
                         i += 1
 
