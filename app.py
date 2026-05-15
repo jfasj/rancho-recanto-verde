@@ -2977,42 +2977,153 @@ elif op == "Consulta ABQM":
                 d_criador    = st.text_input("Criador",          value=dados.get("criador",""),        key="d_cri")
                 d_prop       = st.text_input("Proprietário",     value=dados.get("proprietario",""),   key="d_prop")
 
-            if st.button("💾 Salvar todos os dados no animal", use_container_width=True):
-                c.execute("""
-                    UPDATE animais
-                    SET registro_abqm=%s, nome_oficial_abqm=%s,
-                        pai_abqm=%s, reg_pai_abqm=%s, mae_abqm=%s, reg_mae_abqm=%s,
-                        pelagem_abqm=%s, modalidade_abqm=%s,
-                        avo_pat_abqm=%s, avo_pat_reg=%s,
-                        avo_mat_abqm=%s, avo_mat_reg=%s,
-                        bisavo_pp_abqm=%s, bisavo_pm_abqm=%s,
-                        bisavo_mp_abqm=%s, bisavo_mm_abqm=%s,
-                        criador_abqm=%s, proprietario_abqm=%s
-                    WHERE nome = %s
-                """, (
-                    d_registro, d_nome, d_pai, d_reg_pai, d_mae, d_reg_mae,
-                    d_pelagem, d_modalidade, d_avo_pat, d_avo_pat_r,
-                    d_avo_mat, d_avo_mat_r, d_bisavo_pp, d_bisavo_pm,
-                    d_bisavo_mp, d_bisavo_mm, d_criador, d_prop,
-                    st.session_state["abqm_ia_animal"]
-                ))
-                c.execute("""
-                    INSERT INTO abqm_consultas
-                    (animal, registro_abqm, nome_oficial, pai, mae, pelagem,
-                     nascimento, criador, proprietario, observacoes, data_cadastro)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (
-                    st.session_state["abqm_ia_animal"],
-                    d_registro, d_nome, d_pai, d_mae, d_pelagem,
-                    d_nascimento, d_criador, d_prop,
-                    "Extraído via PDF/Texto",
-                    datetime.now().strftime("%d/%m/%Y %H:%M")
-                ))
-                conn.commit()
-                listar_animais.clear()
-                del st.session_state["abqm_ia_dados"]
-                st.success("✅ Dados salvos com sucesso incluindo genealogia completa!")
-                st.rerun()
+            # ── Opção: vincular a existente OU cadastrar novo ──
+            st.markdown("---")
+            st.markdown("""
+<div style="font-size:0.68rem;color:rgba(212,175,80,0.5);text-transform:uppercase;
+letter-spacing:0.12em;margin-bottom:10px">O que deseja fazer com esses dados?</div>
+""", unsafe_allow_html=True)
+
+            acao_col1, acao_col2 = st.columns(2)
+
+            with acao_col1:
+                if st.button("💾 Salvar em animal existente", use_container_width=True,
+                             disabled=not st.session_state.get("abqm_ia_animal")):
+                    c.execute("""
+                        UPDATE animais
+                        SET registro_abqm=%s, nome_oficial_abqm=%s,
+                            pai_abqm=%s, reg_pai_abqm=%s, mae_abqm=%s, reg_mae_abqm=%s,
+                            pelagem_abqm=%s, modalidade_abqm=%s,
+                            avo_pat_abqm=%s, avo_pat_reg=%s,
+                            avo_mat_abqm=%s, avo_mat_reg=%s,
+                            bisavo_pp_abqm=%s, bisavo_pm_abqm=%s,
+                            bisavo_mp_abqm=%s, bisavo_mm_abqm=%s,
+                            criador_abqm=%s, proprietario_abqm=%s
+                        WHERE nome = %s
+                    """, (
+                        d_registro, d_nome, d_pai, d_reg_pai, d_mae, d_reg_mae,
+                        d_pelagem, d_modalidade, d_avo_pat, d_avo_pat_r,
+                        d_avo_mat, d_avo_mat_r, d_bisavo_pp, d_bisavo_pm,
+                        d_bisavo_mp, d_bisavo_mm, d_criador, d_prop,
+                        st.session_state["abqm_ia_animal"]
+                    ))
+                    c.execute("""
+                        INSERT INTO abqm_consultas
+                        (animal, registro_abqm, nome_oficial, pai, mae, pelagem,
+                         nascimento, criador, proprietario, observacoes, data_cadastro)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """, (
+                        st.session_state["abqm_ia_animal"],
+                        d_registro, d_nome, d_pai, d_mae, d_pelagem,
+                        d_nascimento, d_criador, d_prop,
+                        "Extraído via PDF/Texto",
+                        datetime.now().strftime("%d/%m/%Y %H:%M")
+                    ))
+                    conn.commit()
+                    listar_animais.clear()
+                    del st.session_state["abqm_ia_dados"]
+                    st.success(f"✅ Dados ABQM salvos em '{st.session_state.get('abqm_ia_animal')}'!")
+                    st.rerun()
+
+            with acao_col2:
+                if st.button("🐎 Cadastrar como novo animal", use_container_width=True):
+                    st.session_state["abqm_novo_animal"] = True
+
+            # ── Formulário de cadastro novo animal ──────────
+            if st.session_state.get("abqm_novo_animal"):
+                st.markdown("""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.2);border-radius:12px;
+padding:16px;margin-top:12px">
+<div style="font-family:'Playfair Display',serif;font-size:1rem;color:#d4af50;margin-bottom:14px">
+🐎 Cadastrar novo animal com dados ABQM
+</div>
+""", unsafe_allow_html=True)
+
+                na_col1, na_col2 = st.columns(2)
+                with na_col1:
+                    na_nome     = st.text_input("Nome do animal *", value=d_nome, key="na_nome")
+                    na_tipo     = st.selectbox("Tipo *", ["Equino", "Bovino", "Caprino", "Ovino", "Canino", "Felino", "Outro"], key="na_tipo")
+                    na_raca     = st.text_input("Raça", value="Quarto de Milha", key="na_raca")
+                    na_sexo     = st.selectbox("Sexo", ["Macho", "Fêmea"], key="na_sexo")
+                    na_nasc     = st.text_input("Nascimento", value=d_nascimento, key="na_nasc")
+                    na_pelagem  = st.text_input("Pelagem / Cor", value=d_pelagem, key="na_pelagem")
+                with na_col2:
+                    na_resp     = st.text_input("Responsável", key="na_resp")
+                    na_tel      = st.text_input("Telefone", key="na_tel")
+                    na_local    = st.text_input("Local / Pasto", key="na_local")
+                    na_microchip= st.text_input("Microchip", key="na_microchip")
+                    na_status   = st.selectbox("Status", ["Ativo", "Vendido", "Falecido", "Emprestado"], key="na_status")
+                    na_obs      = st.text_area("Observações", key="na_obs")
+
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    if st.button("✅ Confirmar cadastro", use_container_width=True):
+                        if not na_nome:
+                            st.error("Informe o nome do animal.")
+                        else:
+                            # Verifica se já existe
+                            existe = pd.read_sql_query(
+                                "SELECT id FROM animais WHERE nome = %s",
+                                get_engine(), params=(na_nome,)
+                            )
+                            if not existe.empty:
+                                st.warning(f"Já existe um animal com o nome '{na_nome}'. Escolha outro nome ou use 'Salvar em animal existente'.")
+                            else:
+                                c.execute("""
+                                    INSERT INTO animais
+                                    (nome, tipo, raca, sexo, nascimento, cor,
+                                     responsavel, telefone, local, microchip, status,
+                                     registro_abqm, nome_oficial_abqm,
+                                     pai_abqm, reg_pai_abqm, mae_abqm, reg_mae_abqm,
+                                     pelagem_abqm, modalidade_abqm,
+                                     avo_pat_abqm, avo_pat_reg,
+                                     avo_mat_abqm, avo_mat_reg,
+                                     bisavo_pp_abqm, bisavo_pm_abqm,
+                                     bisavo_mp_abqm, bisavo_mm_abqm,
+                                     criador_abqm, proprietario_abqm, obs)
+                                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                                            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                                            %s,%s,%s,%s,%s,%s,%s,%s)
+                                """, (
+                                    na_nome, na_tipo, na_raca, na_sexo, na_nasc, na_pelagem,
+                                    na_resp, na_tel, na_local, na_microchip, na_status,
+                                    d_registro, d_nome,
+                                    d_pai, d_reg_pai, d_mae, d_reg_mae,
+                                    d_pelagem, d_modalidade,
+                                    d_avo_pat, d_avo_pat_r,
+                                    d_avo_mat, d_avo_mat_r,
+                                    d_bisavo_pp, d_bisavo_pm,
+                                    d_bisavo_mp, d_bisavo_mm,
+                                    d_criador, d_prop, na_obs
+                                ))
+                                c.execute("""
+                                    INSERT INTO abqm_consultas
+                                    (animal, registro_abqm, nome_oficial, pai, mae,
+                                     pelagem, nascimento, criador, proprietario,
+                                     observacoes, data_cadastro)
+                                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                """, (
+                                    na_nome, d_registro, d_nome, d_pai, d_mae,
+                                    d_pelagem, d_nascimento, d_criador, d_prop,
+                                    "Cadastrado via PDF/Texto ABQM",
+                                    datetime.now().strftime("%d/%m/%Y %H:%M")
+                                ))
+                                conn.commit()
+                                listar_animais.clear()
+                                _carregar_dashboard.clear()
+                                del st.session_state["abqm_ia_dados"]
+                                st.session_state.pop("abqm_novo_animal", None)
+                                st.success(f"✅ Animal '{na_nome}' cadastrado com todos os dados ABQM e genealogia!")
+                                st.balloons()
+                                st.rerun()
+
+                with btn_col2:
+                    if st.button("❌ Cancelar", use_container_width=True):
+                        st.session_state.pop("abqm_novo_animal", None)
+                        st.rerun()
+
+                st.markdown("</div>", unsafe_allow_html=True)
+
 
     # ── ÁRVORE GENEALÓGICA ─────────────────────────────────
     elif aba == "🌳 Árvore Genealógica":
