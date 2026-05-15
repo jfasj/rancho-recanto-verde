@@ -88,6 +88,7 @@ def _pdf_str(texto):
 
 st.set_page_config(
     page_title="Rancho Recanto Verde",
+    page_icon="🐎",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -507,34 +508,48 @@ st.markdown("""
 [data-testid="stSidebar"] * { color: rgba(255,255,255,0.75) !important; }
 
 /* Itens do menu lateral */
-[data-testid="stSidebar"] [role="radiogroup"] label {
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin: 2px 8px;
-    transition: all .15s;
-    font-size: 0.88rem;
-    font-weight: 400;
-    color: rgba(255,255,255,0.65) !important;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+[data-testid="stSidebar"] [role="radiogroup"] label,
+[data-testid="stSidebar"] [role="radiogroup"] label p,
+[data-testid="stSidebar"] [role="radiogroup"] label div,
+[data-testid="stSidebar"] [role="radiogroup"] label span {
+    color: rgba(255,255,255,0.75) !important;
+    font-size: 0.88rem !important;
+    font-weight: 400 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-    background: rgba(255,255,255,0.08);
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 8px;
+    padding: 10px 14px !important;
+    margin: 2px 8px !important;
+    transition: all .15s;
+    display: flex !important;
+    align-items: center !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover,
+[data-testid="stSidebar"] [role="radiogroup"] label:hover p,
+[data-testid="stSidebar"] [role="radiogroup"] label:hover span {
+    background: rgba(255,255,255,0.08) !important;
     color: #ffffff !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label,
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
     background: rgba(201,168,76,0.15) !important;
-    color: var(--gold) !important;
-    font-weight: 500 !important;
     border-left: 3px solid var(--gold) !important;
     border-radius: 0 8px 8px 0 !important;
     margin-left: 0 !important;
     padding-left: 19px !important;
 }
+[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label p,
+[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label span {
+    color: var(--gold) !important;
+    font-weight: 500 !important;
+}
+/* Esconde o radio button circular */
+[data-testid="stSidebar"] [role="radiogroup"] [data-testid="stMarkdownContainer"] { display: none !important; }
+[data-testid="stSidebar"] [role="radio"] { display: none !important; }
 
 /* ── Tipografia ── */
 h1, h2, h3 {
@@ -590,23 +605,26 @@ div[data-testid="stMetricDelta"] { font-size: 0.78rem !important; }
     box-shadow: 0 4px 12px rgba(26,58,42,0.2);
 }
 
-/* Botões de ação em colunas (módulos) */
+/* Botões de ação em colunas (módulos do dashboard) */
 div[data-testid="column"] .stButton button {
-    min-height: 52px;
-    font-size: 0.9rem;
-    border-radius: 10px;
+    min-height: 120px;
+    font-size: 0.95rem;
+    border-radius: 12px;
     border: 0.5px solid var(--line) !important;
     background: var(--surface) !important;
     color: var(--text) !important;
-    font-weight: 400 !important;
+    font-weight: 500 !important;
     box-shadow: none;
+    white-space: pre-wrap !important;
+    line-height: 1.6 !important;
+    padding: 16px 12px !important;
 }
 div[data-testid="column"] .stButton button:hover {
     background: var(--sidebar) !important;
     color: var(--gold) !important;
     border-color: var(--sidebar) !important;
-    box-shadow: 0 4px 12px rgba(26,58,42,0.15) !important;
-    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(26,58,42,0.18) !important;
+    transform: translateY(-3px);
 }
 
 /* ── Inputs ── */
@@ -2106,14 +2124,7 @@ if op == "Dashboard":
 
     for col, (icone, titulo, subtitulo, pagina) in zip(linha1, atalhos):
         with col:
-            st.markdown(f"""
-            <div class="app-grid-card">
-                <div class="app-grid-icon">{icone}</div>
-                <div class="app-grid-title">{titulo}</div>
-                <div class="app-grid-subtitle">{subtitulo}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button(f"Abrir {titulo}", key=f"atalho_{pagina}", use_container_width=True):
+            if st.button(f"{icone}\n{titulo}\n{subtitulo}", key=f"atalho_{pagina}", use_container_width=True):
                 st.session_state.pagina_atual = pagina
                 st.rerun()
 
@@ -2127,14 +2138,7 @@ if op == "Dashboard":
 
     for col, (icone, titulo, subtitulo, pagina) in zip(linha2, atalhos2):
         with col:
-            st.markdown(f"""
-            <div class="app-grid-card">
-                <div class="app-grid-icon">{icone}</div>
-                <div class="app-grid-title">{titulo}</div>
-                <div class="app-grid-subtitle">{subtitulo}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button(f"Abrir {titulo}", key=f"atalho_{pagina}", use_container_width=True):
+            if st.button(f"{icone}\n{titulo}\n{subtitulo}", key=f"atalho_{pagina}", use_container_width=True):
                 st.session_state.pagina_atual = pagina
                 st.rerun()
 
