@@ -1137,15 +1137,12 @@ if not st.session_state.logado:
     st.stop()
 
 
-# ── Autorefresh: verifica alertas a cada 5 min enquanto o app estiver aberto ──
+# ── Autorefresh: placeholder — chamada real fica após definição das funções ──
 if _AUTOREFRESH_OK:
     _refresh_count = st_autorefresh(interval=5 * 60 * 1000, key="alert_autorefresh")
-    if _refresh_count > 0:
-        _enviados_auto = verificar_e_disparar_alertas_auto()
-        if _enviados_auto > 0:
-            st.toast(f"✅ {_enviados_auto} alerta(s) WhatsApp enviado(s) automaticamente!", icon="📲")
 else:
     st.sidebar.caption("⚠️ Instale streamlit-autorefresh para alertas automáticos.")
+    _refresh_count = 0
 
 
 def topbar():
@@ -1408,6 +1405,11 @@ def verificar_e_disparar_alertas_auto():
     return enviados
 
 
+# ── Autorefresh: dispara alertas após função estar definida ──
+if _AUTOREFRESH_OK and _refresh_count > 0:
+    _enviados_auto = verificar_e_disparar_alertas_auto()
+    if _enviados_auto > 0:
+        st.toast(f"✅ {_enviados_auto} alerta(s) WhatsApp enviado(s) automaticamente!", icon="📲")
 
 
 # =========================================================
