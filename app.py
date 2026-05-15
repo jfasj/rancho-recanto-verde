@@ -166,6 +166,13 @@ _SCHEMA = {
         "responsavel", "cpf", "telefone", "local", "microchip", "status",
         "registro_abqm", "nome_oficial_abqm", "pai_abqm", "mae_abqm",
         "criador_abqm", "proprietario_abqm", "link_abqm", "obs_abqm", "obs",
+        # Genealogia estendida (avós e bisavós)
+        "avo_pat_abqm", "avo_pat_reg",
+        "avo_mat_abqm", "avo_mat_reg",
+        "bisavo_pp_abqm", "bisavo_pm_abqm",
+        "bisavo_mp_abqm", "bisavo_mm_abqm",
+        # Dados extras ABQM
+        "pelagem_abqm", "modalidade_abqm", "reg_mae_abqm", "reg_pai_abqm",
     ],
     "farmacia": [
         "medicamento", "categoria", "quantidade", "estoque_min", "unidade",
@@ -2739,87 +2746,463 @@ elif op == "Controle Sanitário":
 # =========================================================
 
 elif op == "Consulta ABQM":
-    titulo_pagina("🔎 Consulta ABQM", "Consulta assistida e cadastro de dados oficiais ABQM")
-
-    st.info("A consulta oficial da ABQM exige login no site. Esta aba permite abrir o site oficial e salvar os dados consultados dentro do sistema.")
+    titulo_pagina("🔎 Consulta ABQM", "Integração assistida, preenchimento por IA e árvore genealógica")
 
     aba = st.radio(
         "Opção",
-        ["Consultar / Cadastrar Dados", "Histórico ABQM"],
+        ["🌐 Consultar ABQM", "🤖 Preencher por IA", "🌳 Árvore Genealógica", "📋 Histórico ABQM"],
         horizontal=True
     )
 
-    animais = listar_animais()
+    animais_abqm = listar_animais()
 
-    if aba == "Consultar / Cadastrar Dados":
-        termo = st.text_input("Digite nome ou registro ABQM para consulta")
-        st.link_button("🔎 Abrir Consulta Oficial ABQM", link_consulta_abqm(termo), use_container_width=True)
+    # ── CONSULTAR ABQM ──────────────────────────────────────
+    if aba == "🌐 Consultar ABQM":
+        titulo_pagina("🌐 Consulta Oficial ABQM", "Busque o animal no site oficial e salve os dados aqui")
+
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            registro_busca = st.text_input("Nº de Registro ABQM", placeholder="Ex: 000123456")
+        with col_b2:
+            nome_busca = st.text_input("Nome do animal", placeholder="Ex: TROVÃO DO RECANTO")
+
+        col_link1, col_link2, col_link3 = st.columns(3)
+        with col_link1:
+            url_reg = f"https://consulta.abqm.com.br/animal/{registro_busca}" if registro_busca else "https://consulta.abqm.com.br/"
+            st.link_button("🔎 Buscar por Registro", url_reg, use_container_width=True)
+        with col_link2:
+            url_nome = f"https://consulta.abqm.com.br/?nome={nome_busca.replace(' ', '+')}" if nome_busca else "https://consulta.abqm.com.br/"
+            st.link_button("🔎 Buscar por Nome", url_nome, use_container_width=True)
+        with col_link3:
+            st.link_button("🏠 Site ABQM", "https://www.abqm.com.br", use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### Salvar dados ABQM no sistema")
+        st.info("💡 **Como usar:** Abra a consulta ABQM acima, encontre o animal, copie os dados e use a aba **🤖 Preencher por IA** para preencher tudo automaticamente.")
 
-        if animais.empty:
-            st.warning("Cadastre um animal primeiro para vincular os dados ABQM.")
+        st.markdown("### Salvar dados manualmente")
+
+        if animais_abqm.empty:
+            st.warning("Cadastre um animal primeiro.")
         else:
-            animais["descricao"] = animais["nome"] + " - " + animais["tipo"]
-            escolha = st.selectbox("Vincular ao animal", animais["descricao"].tolist())
+            animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"]
+            escolha = st.selectbox("Vincular ao animal", animais_abqm["descricao"].tolist())
             animal_nome = escolha.split(" - ")[0]
-
             animal_atual = pd.read_sql_query(
-                "SELECT * FROM animais WHERE nome = %s", get_engine(),
-                params=(animal_nome,)
+                "SELECT * FROM animais WHERE nome = %s", get_engine(), params=(animal_nome,)
             ).iloc[0]
 
             col1, col2 = st.columns(2)
-
             with col1:
-                registro_abqm = st.text_input("Registro ABQM", value=str(animal_atual.get("registro_abqm", "") or termo or ""))
-                nome_oficial = st.text_input("Nome oficial", value=str(animal_atual.get("nome_oficial_abqm", "") or animal_nome))
-                pai = st.text_input("Pai", value=str(animal_atual.get("pai_abqm", "") or ""))
-                mae = st.text_input("Mãe", value=str(animal_atual.get("mae_abqm", "") or ""))
-                pelagem = st.text_input("Pelagem", value=str(animal_atual.get("cor", "") or ""))
-
+                registro_abqm  = st.text_input("Registro ABQM", value=str(animal_atual.get("registro_abqm", "") or registro_busca or ""))
+                nome_oficial   = st.text_input("Nome oficial", value=str(animal_atual.get("nome_oficial_abqm", "") or animal_nome))
+                pai            = st.text_input("Pai", value=str(animal_atual.get("pai_abqm", "") or ""))
+                reg_pai        = st.text_input("Registro do Pai", value=str(animal_atual.get("reg_pai_abqm", "") or ""))
+                mae            = st.text_input("Mãe", value=str(animal_atual.get("mae_abqm", "") or ""))
+                reg_mae        = st.text_input("Registro da Mãe", value=str(animal_atual.get("reg_mae_abqm", "") or ""))
+                pelagem        = st.text_input("Pelagem", value=str(animal_atual.get("pelagem_abqm", "") or animal_atual.get("cor", "") or ""))
+                modalidade     = st.text_input("Modalidade", value=str(animal_atual.get("modalidade_abqm", "") or ""))
             with col2:
-                nascimento = st.text_input("Nascimento", value=str(animal_atual.get("nascimento", "") or ""))
-                criador = st.text_input("Criador", value=str(animal_atual.get("criador_abqm", "") or ""))
-                proprietario = st.text_input("Proprietário", value=str(animal_atual.get("proprietario_abqm", "") or ""))
-                link_consulta = st.text_input("Link/observação da consulta", value=str(animal_atual.get("link_abqm", "") or link_consulta_abqm(termo)))
-                observacoes = st.text_area("Observações", value=str(animal_atual.get("obs_abqm", "") or ""))
+                avo_pat        = st.text_input("Avô Paterno", value=str(animal_atual.get("avo_pat_abqm", "") or ""))
+                avo_pat_reg    = st.text_input("Reg. Avô Paterno", value=str(animal_atual.get("avo_pat_reg", "") or ""))
+                avo_mat        = st.text_input("Avó Materna", value=str(animal_atual.get("avo_mat_abqm", "") or ""))
+                avo_mat_reg    = st.text_input("Reg. Avó Materna", value=str(animal_atual.get("avo_mat_reg", "") or ""))
+                nascimento     = st.text_input("Nascimento", value=str(animal_atual.get("nascimento", "") or ""))
+                criador        = st.text_input("Criador", value=str(animal_atual.get("criador_abqm", "") or ""))
+                proprietario   = st.text_input("Proprietário", value=str(animal_atual.get("proprietario_abqm", "") or ""))
+                observacoes    = st.text_area("Observações", value=str(animal_atual.get("obs_abqm", "") or ""))
 
-            if st.button("Salvar dados ABQM no animal"):
+            if st.button("💾 Salvar dados ABQM", use_container_width=True):
                 c.execute("""
                     UPDATE animais
-                    SET registro_abqm = %s, nome_oficial_abqm = %s, pai_abqm = %s,
-                        mae_abqm = %s, criador_abqm = %s, proprietario_abqm = %s,
-                        link_abqm = %s, obs_abqm = %s
+                    SET registro_abqm=%s, nome_oficial_abqm=%s, pai_abqm=%s, mae_abqm=%s,
+                        criador_abqm=%s, proprietario_abqm=%s, obs_abqm=%s,
+                        reg_pai_abqm=%s, reg_mae_abqm=%s, pelagem_abqm=%s, modalidade_abqm=%s,
+                        avo_pat_abqm=%s, avo_pat_reg=%s, avo_mat_abqm=%s, avo_mat_reg=%s
                     WHERE nome = %s
                 """, (
-                    registro_abqm, nome_oficial, pai, mae, criador,
-                    proprietario, link_consulta, observacoes, animal_nome
+                    registro_abqm, nome_oficial, pai, mae, criador, proprietario, observacoes,
+                    reg_pai, reg_mae, pelagem, modalidade,
+                    avo_pat, avo_pat_reg, avo_mat, avo_mat_reg,
+                    animal_nome
                 ))
-
                 c.execute("""
                     INSERT INTO abqm_consultas
-                    (animal, registro_abqm, nome_oficial, pai, mae,
-                     pelagem, nascimento, criador, proprietario,
-                     link_consulta, observacoes, data_cadastro)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (animal, registro_abqm, nome_oficial, pai, mae, pelagem,
+                     nascimento, criador, proprietario, observacoes, data_cadastro)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """, (
-                    animal_nome, registro_abqm, nome_oficial, pai, mae,
-                    pelagem, nascimento, criador, proprietario,
-                    link_consulta, observacoes,
+                    animal_nome, registro_abqm, nome_oficial, pai, mae, pelagem,
+                    nascimento, criador, proprietario, observacoes,
                     datetime.now().strftime("%d/%m/%Y %H:%M")
                 ))
-
                 conn.commit()
-                st.success("Dados ABQM salvos e vinculados ao animal!")
+                listar_animais.clear()
+                st.success("✅ Dados ABQM salvos com sucesso!")
 
-    elif aba == "Histórico ABQM":
-        df = pd.read_sql_query("SELECT * FROM abqm_consultas WHERE animal IS NOT NULL", get_engine())
+    # ── PREENCHER POR IA ────────────────────────────────────
+    elif aba == "🤖 Preencher por IA":
+        titulo_pagina("🤖 Preencher por IA", "Cole o texto da página ABQM e a IA extrai todos os dados automaticamente")
 
+        st.markdown("""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.2);border-radius:12px;padding:16px;margin-bottom:16px">
+  <div style="font-size:0.88rem;color:#d4c9b0;font-weight:500;margin-bottom:8px">📋 Como usar em 3 passos:</div>
+  <div style="font-size:0.82rem;color:#7a8fa3;line-height:1.8">
+    1. Acesse <strong style="color:#d4af50">consulta.abqm.com.br</strong> e encontre o animal<br>
+    2. Selecione todo o texto da página (Ctrl+A) e copie (Ctrl+C)<br>
+    3. Cole abaixo e clique em <strong style="color:#d4af50">Extrair com IA</strong>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+        if animais_abqm.empty:
+            st.warning("Cadastre um animal primeiro para vincular os dados.")
+        else:
+            animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"]
+            escolha_ia = st.selectbox("Vincular ao animal", animais_abqm["descricao"].tolist(), key="ia_animal")
+            animal_ia = escolha_ia.split(" - ")[0]
+
+        texto_abqm = st.text_area(
+            "Cole aqui o texto copiado da página ABQM",
+            height=200,
+            placeholder="Cole o texto completo da ficha do animal no site da ABQM..."
+        )
+
+        if st.button("🤖 Extrair dados com IA", use_container_width=True, disabled=not texto_abqm):
+            with st.spinner("Analisando texto com IA..."):
+                try:
+                    prompt = f"""Analise o texto abaixo copiado do site da ABQM (Associação Brasileira de Quarto de Milha) e extraia os dados do animal em formato JSON.
+
+Texto:
+{texto_abqm}
+
+Retorne APENAS um JSON válido com estas chaves (deixe vazio "" se não encontrar):
+{{
+  "registro_abqm": "",
+  "nome_oficial": "",
+  "pai": "",
+  "reg_pai": "",
+  "mae": "",
+  "reg_mae": "",
+  "avo_paterno": "",
+  "reg_avo_paterno": "",
+  "avo_materno": "",
+  "reg_avo_materno": "",
+  "bisavo_pp": "",
+  "bisavo_pm": "",
+  "bisavo_mp": "",
+  "bisavo_mm": "",
+  "pelagem": "",
+  "nascimento": "",
+  "sexo": "",
+  "criador": "",
+  "proprietario": "",
+  "modalidade": "",
+  "observacoes": ""
+}}
+
+Responda APENAS com o JSON, sem texto adicional."""
+
+                    import json
+                    resp = __import__('requests').post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={"Content-Type": "application/json"},
+                        json={
+                            "model": "claude-sonnet-4-20250514",
+                            "max_tokens": 1000,
+                            "messages": [{"role": "user", "content": prompt}]
+                        }
+                    )
+                    raw = resp.json()["content"][0]["text"].strip()
+                    raw = raw.replace("```json", "").replace("```", "").strip()
+                    dados = json.loads(raw)
+                    st.session_state["abqm_ia_dados"] = dados
+                    st.session_state["abqm_ia_animal"] = animal_ia
+                    st.success("✅ Dados extraídos! Revise abaixo e salve.")
+                except Exception as e:
+                    st.error(f"Erro ao processar com IA: {e}")
+
+        # Mostra campos preenchidos para revisão
+        if "abqm_ia_dados" in st.session_state:
+            dados = st.session_state["abqm_ia_dados"]
+            st.markdown("### ✏️ Revise e confirme os dados extraídos")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                d_registro   = st.text_input("Registro ABQM",    value=dados.get("registro_abqm", ""),   key="d_reg")
+                d_nome       = st.text_input("Nome oficial",      value=dados.get("nome_oficial", ""),    key="d_nome")
+                d_pai        = st.text_input("Pai",               value=dados.get("pai", ""),              key="d_pai")
+                d_reg_pai    = st.text_input("Registro do Pai",   value=dados.get("reg_pai", ""),          key="d_rpai")
+                d_mae        = st.text_input("Mãe",               value=dados.get("mae", ""),              key="d_mae")
+                d_reg_mae    = st.text_input("Registro da Mãe",   value=dados.get("reg_mae", ""),          key="d_rmae")
+                d_pelagem    = st.text_input("Pelagem",            value=dados.get("pelagem", ""),          key="d_pel")
+                d_modalidade = st.text_input("Modalidade",         value=dados.get("modalidade", ""),       key="d_mod")
+            with col2:
+                d_avo_pat    = st.text_input("Avô Paterno",       value=dados.get("avo_paterno", ""),      key="d_avopat")
+                d_avo_pat_r  = st.text_input("Reg. Avô Paterno",  value=dados.get("reg_avo_paterno", ""),  key="d_avopat_r")
+                d_avo_mat    = st.text_input("Avó Materna",       value=dados.get("avo_materno", ""),      key="d_avomat")
+                d_avo_mat_r  = st.text_input("Reg. Avó Materna",  value=dados.get("reg_avo_materno", ""),  key="d_avomat_r")
+                d_bisavo_pp  = st.text_input("Bisavô Pat-Pat",    value=dados.get("bisavo_pp", ""),        key="d_bpp")
+                d_bisavo_pm  = st.text_input("Bisavô Pat-Mat",    value=dados.get("bisavo_pm", ""),        key="d_bpm")
+                d_bisavo_mp  = st.text_input("Bisavô Mat-Pat",    value=dados.get("bisavo_mp", ""),        key="d_bmp")
+                d_bisavo_mm  = st.text_input("Bisavô Mat-Mat",    value=dados.get("bisavo_mm", ""),        key="d_bmm")
+                d_nascimento = st.text_input("Nascimento",        value=dados.get("nascimento", ""),       key="d_nasc")
+                d_criador    = st.text_input("Criador",           value=dados.get("criador", ""),          key="d_cri")
+                d_prop       = st.text_input("Proprietário",      value=dados.get("proprietario", ""),     key="d_prop")
+
+            if st.button("💾 Salvar todos os dados no animal", use_container_width=True):
+                c.execute("""
+                    UPDATE animais
+                    SET registro_abqm=%s, nome_oficial_abqm=%s,
+                        pai_abqm=%s, reg_pai_abqm=%s, mae_abqm=%s, reg_mae_abqm=%s,
+                        pelagem_abqm=%s, modalidade_abqm=%s,
+                        avo_pat_abqm=%s, avo_pat_reg=%s,
+                        avo_mat_abqm=%s, avo_mat_reg=%s,
+                        bisavo_pp_abqm=%s, bisavo_pm_abqm=%s,
+                        bisavo_mp_abqm=%s, bisavo_mm_abqm=%s,
+                        criador_abqm=%s, proprietario_abqm=%s
+                    WHERE nome = %s
+                """, (
+                    d_registro, d_nome,
+                    d_pai, d_reg_pai, d_mae, d_reg_mae,
+                    d_pelagem, d_modalidade,
+                    d_avo_pat, d_avo_pat_r,
+                    d_avo_mat, d_avo_mat_r,
+                    d_bisavo_pp, d_bisavo_pm,
+                    d_bisavo_mp, d_bisavo_mm,
+                    d_criador, d_prop,
+                    st.session_state["abqm_ia_animal"]
+                ))
+                c.execute("""
+                    INSERT INTO abqm_consultas
+                    (animal, registro_abqm, nome_oficial, pai, mae, pelagem,
+                     nascimento, criador, proprietario, observacoes, data_cadastro)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    st.session_state["abqm_ia_animal"],
+                    d_registro, d_nome, d_pai, d_mae, d_pelagem,
+                    d_nascimento, d_criador, d_prop,
+                    "Extraído via IA",
+                    datetime.now().strftime("%d/%m/%Y %H:%M")
+                ))
+                conn.commit()
+                listar_animais.clear()
+                del st.session_state["abqm_ia_dados"]
+                st.success(f"✅ Dados do animal salvos com sucesso incluindo genealogia completa!")
+                st.rerun()
+
+    # ── ÁRVORE GENEALÓGICA ─────────────────────────────────
+    elif aba == "🌳 Árvore Genealógica":
+        titulo_pagina("🌳 Árvore Genealógica", "Visualização da linhagem do animal")
+
+        if animais_abqm.empty:
+            st.warning("Nenhum animal cadastrado.")
+        else:
+            animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"]
+            escolha_arv = st.selectbox("Selecione o animal", animais_abqm["descricao"].tolist(), key="arv_animal")
+            animal_arv = escolha_arv.split(" - ")[0]
+
+            a = pd.read_sql_query(
+                "SELECT * FROM animais WHERE nome = %s", get_engine(), params=(animal_arv,)
+            ).iloc[0]
+
+            # Dados
+            nome_a     = str(a.get("nome_oficial_abqm") or a.get("nome") or animal_arv)
+            reg_a      = str(a.get("registro_abqm") or "")
+            pai_a      = str(a.get("pai_abqm") or "")
+            reg_pai    = str(a.get("reg_pai_abqm") or "")
+            mae_a      = str(a.get("mae_abqm") or "")
+            reg_mae    = str(a.get("reg_mae_abqm") or "")
+            avo_pat    = str(a.get("avo_pat_abqm") or "")
+            avo_pat_r  = str(a.get("avo_pat_reg") or "")
+            avo_mat    = str(a.get("avo_mat_abqm") or "")
+            avo_mat_r  = str(a.get("avo_mat_reg") or "")
+            bpp        = str(a.get("bisavo_pp_abqm") or "")
+            bpm        = str(a.get("bisavo_pm_abqm") or "")
+            bmp        = str(a.get("bisavo_mp_abqm") or "")
+            bmm        = str(a.get("bisavo_mm_abqm") or "")
+            pelagem    = str(a.get("pelagem_abqm") or a.get("cor") or "")
+            criador    = str(a.get("criador_abqm") or "")
+            prop       = str(a.get("proprietario_abqm") or "")
+            nasc       = str(a.get("nascimento") or "")
+
+            def _no(nome, reg="", cor="#0d1f3c", borda="#d4af50", texto="#e8e2d5"):
+                reg_txt = f"<div style='font-size:0.6rem;color:#7a8fa3;margin-top:1px'>{reg}</div>" if reg else ""
+                sem_dado = not nome or nome in ("", "None")
+                bg = "rgba(13,31,60,0.4)" if sem_dado else cor
+                op = "0.45" if sem_dado else "1"
+                label = "—" if sem_dado else nome[:28]
+                return f"""<div style='background:{bg};border:1px solid {borda};border-radius:8px;
+padding:7px 10px;text-align:center;opacity:{op};min-width:130px;max-width:160px'>
+<div style='font-size:0.75rem;font-weight:500;color:{texto};line-height:1.3'>{label}</div>
+{reg_txt}</div>"""
+
+            html_arv = f"""
+<style>
+.arv-wrap{{font-family:'DM Sans',sans-serif;overflow-x:auto;padding:10px 0}}
+.arv-row{{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:6px}}
+.arv-col{{display:flex;flex-direction:column;gap:6px;align-items:center}}
+.arv-linha{{color:rgba(212,175,80,0.25);font-size:1.2rem;line-height:1}}
+.arv-titulo{{font-family:'Playfair Display',serif;font-size:0.7rem;color:rgba(212,175,80,0.45);
+text-transform:uppercase;letter-spacing:0.12em;text-align:center;margin-bottom:4px}}
+</style>
+<div class="arv-wrap">
+
+  <div class="arv-titulo">Árvore Genealógica — {nome_a}</div>
+
+  <!-- Cabeçalho de geração -->
+  <div style="display:flex;justify-content:center;gap:80px;margin-bottom:2px">
+    <div style="font-size:0.62rem;color:rgba(212,175,80,0.35);text-transform:uppercase;letter-spacing:0.1em">Animal</div>
+    <div style="font-size:0.62rem;color:rgba(212,175,80,0.35);text-transform:uppercase;letter-spacing:0.1em">Pais</div>
+    <div style="font-size:0.62rem;color:rgba(212,175,80,0.35);text-transform:uppercase;letter-spacing:0.1em">Avós</div>
+    <div style="font-size:0.62rem;color:rgba(212,175,80,0.35);text-transform:uppercase;letter-spacing:0.1em">Bisavós</div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:16px;justify-content:center">
+
+    <!-- Animal principal -->
+    <div style="display:flex;flex-direction:column;align-items:center">
+      {_no(nome_a, reg_a, "#0f2444", "#d4af50", "#d4af50")}
+      <div style="font-size:0.62rem;color:#5a7a6a;margin-top:4px">{pelagem}</div>
+      <div style="font-size:0.62rem;color:#5a7a6a">{nasc}</div>
+    </div>
+
+    <div style="color:rgba(212,175,80,0.2);font-size:1.5rem">›</div>
+
+    <!-- Pais -->
+    <div style="display:flex;flex-direction:column;gap:24px;align-items:center">
+      <div>
+        <div style="font-size:0.62rem;color:#4a9e6b;text-align:center;margin-bottom:3px;letter-spacing:0.06em">PAI</div>
+        {_no(pai_a, reg_pai, "#0d1f3c", "#4a9e6b")}
+      </div>
+      <div>
+        <div style="font-size:0.62rem;color:#4a8fcf;text-align:center;margin-bottom:3px;letter-spacing:0.06em">MÃE</div>
+        {_no(mae_a, reg_mae, "#0d1f3c", "#4a8fcf")}
+      </div>
+    </div>
+
+    <div style="color:rgba(212,175,80,0.2);font-size:1.5rem">›</div>
+
+    <!-- Avós -->
+    <div style="display:flex;flex-direction:column;gap:12px;align-items:center">
+      <div>
+        <div style="font-size:0.6rem;color:#4a9e6b;text-align:center;margin-bottom:2px">AVÔ PAT.</div>
+        {_no(avo_pat, avo_pat_r, "#0d1f3c", "#4a9e6b")}
+      </div>
+      <div style="height:12px"></div>
+      <div>
+        <div style="font-size:0.6rem;color:#4a8fcf;text-align:center;margin-bottom:2px">AVÓ MAT.</div>
+        {_no(avo_mat, avo_mat_r, "#0d1f3c", "#4a8fcf")}
+      </div>
+    </div>
+
+    <div style="color:rgba(212,175,80,0.2);font-size:1.5rem">›</div>
+
+    <!-- Bisavós -->
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:center">
+      <div>
+        <div style="font-size:0.58rem;color:#5a7a6a;text-align:center;margin-bottom:2px">BISAVÔ P-P</div>
+        {_no(bpp, "", "#0a1628", "#3a5068", "#8a9bb0")}
+      </div>
+      <div>
+        <div style="font-size:0.58rem;color:#5a7a6a;text-align:center;margin-bottom:2px">BISAVÔ P-M</div>
+        {_no(bpm, "", "#0a1628", "#3a5068", "#8a9bb0")}
+      </div>
+      <div>
+        <div style="font-size:0.58rem;color:#5a7a6a;text-align:center;margin-bottom:2px">BISAVÔ M-P</div>
+        {_no(bmp, "", "#0a1628", "#3a5068", "#8a9bb0")}
+      </div>
+      <div>
+        <div style="font-size:0.58rem;color:#5a7a6a;text-align:center;margin-bottom:2px">BISAVÔ M-M</div>
+        {_no(bmm, "", "#0a1628", "#3a5068", "#8a9bb0")}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Rodapé informativo -->
+  <div style="margin-top:16px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
+    <div style="font-size:0.72rem;color:#5a7a6a">🧑‍🌾 Criador: <span style="color:#d4c9b0">{criador or '—'}</span></div>
+    <div style="font-size:0.72rem;color:#5a7a6a">🏠 Proprietário: <span style="color:#d4c9b0">{prop or '—'}</span></div>
+    <div style="font-size:0.72rem;color:#5a7a6a">🎨 Pelagem: <span style="color:#d4c9b0">{pelagem or '—'}</span></div>
+  </div>
+</div>
+"""
+            st.markdown(html_arv, unsafe_allow_html=True)
+
+            # Legenda de completude
+            campos_genealogia = [pai_a, mae_a, avo_pat, avo_mat, bpp, bpm, bmp, bmm]
+            preenchidos = sum(1 for c0 in campos_genealogia if c0 and c0 != "None")
+            pct = int(preenchidos / len(campos_genealogia) * 100)
+
+            st.markdown(f"""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.12);border-radius:10px;
+padding:12px 16px;margin-top:12px;display:flex;align-items:center;gap:12px">
+  <div style="flex:1">
+    <div style="font-size:0.72rem;color:#5a7a6a;margin-bottom:6px">Completude da genealogia</div>
+    <div style="background:#0a1628;border-radius:99px;height:6px;overflow:hidden">
+      <div style="background:{'#4a9e6b' if pct>=75 else '#e8b84b' if pct>=40 else '#e05252'};
+        width:{pct}%;height:100%;border-radius:99px;transition:width .3s"></div>
+    </div>
+  </div>
+  <div style="font-family:'Playfair Display',serif;font-size:1.2rem;
+    color:{'#4a9e6b' if pct>=75 else '#e8b84b' if pct>=40 else '#e05252'}">{pct}%</div>
+</div>
+""", unsafe_allow_html=True)
+
+            if pct < 100:
+                st.info("💡 Para completar a árvore, use a aba **🤖 Preencher por IA** colando o texto do site da ABQM.")
+
+            # Exportar PDF da árvore
+            if st.button("📄 Gerar PDF da Árvore Genealógica", use_container_width=True):
+                _init_fonte_pdf()
+                buf = BytesIO()
+                pdf = canvas.Canvas(buf, pagesize=letter)
+                larg, alt = letter
+
+                if os.path.exists(LOGO):
+                    pdf.drawImage(LOGO, 130, 690, width=350, height=95, preserveAspectRatio=True, mask="auto")
+
+                pdf.setFont(_fonte(bold=True), 14)
+                pdf.drawCentredString(larg/2, 660, _pdf_str(f"ÁRVORE GENEALÓGICA — {nome_a}"))
+                pdf.setFont(_fonte(), 9)
+                pdf.drawCentredString(larg/2, 645, _pdf_str(f"Registro ABQM: {reg_a}  |  Pelagem: {pelagem}  |  Nascimento: {nasc}"))
+
+                y = 610
+                secoes_pdf = [
+                    ("ANIMAL",   [(nome_a, reg_a)]),
+                    ("PAI",      [(pai_a, reg_pai)]),
+                    ("MÃE",      [(mae_a, reg_mae)]),
+                    ("AVÔ PATERNO", [(avo_pat, avo_pat_r)]),
+                    ("AVÓ MATERNA", [(avo_mat, avo_mat_r)]),
+                    ("BISAVÓS",  [(bpp, "Pat-Pat"), (bpm, "Pat-Mat"), (bmp, "Mat-Pat"), (bmm, "Mat-Mat")]),
+                    ("CRIADOR / PROPRIETÁRIO", [(criador, "Criador"), (prop, "Proprietário")]),
+                ]
+                for titulo_pdf, items in secoes_pdf:
+                    pdf.setFont(_fonte(bold=True), 10)
+                    pdf.drawString(50, y, _pdf_str(titulo_pdf))
+                    y -= 14
+                    pdf.setFont(_fonte(), 9)
+                    for nome_item, detalhe in items:
+                        if nome_item and nome_item != "None":
+                            pdf.drawString(70, y, _pdf_str(f"{detalhe}: {nome_item}" if detalhe else nome_item))
+                            y -= 12
+                    y -= 4
+                    if y < 80:
+                        pdf.showPage(); y = 750
+
+                pdf.save()
+                st.download_button(
+                    "📥 Baixar PDF",
+                    data=buf.getvalue(),
+                    file_name=f"genealogia_{animal_arv}.pdf",
+                    mime="application/pdf"
+                )
+
+    # ── HISTÓRICO ABQM ─────────────────────────────────────
+    elif aba == "📋 Histórico ABQM":
+        df = pd.read_sql_query("SELECT * FROM abqm_consultas WHERE animal IS NOT NULL ORDER BY id DESC", get_engine())
         if not df.empty:
-            st.dataframe(df, use_container_width=True)
-
+            st.dataframe(df, use_container_width=True, hide_index=True)
             st.download_button(
                 "📥 Baixar Histórico ABQM",
                 data=gerar_excel(df),
@@ -2828,6 +3211,8 @@ elif op == "Consulta ABQM":
             )
         else:
             st.warning("Nenhuma consulta ABQM salva ainda.")
+
+
 
 
 # =========================================================
