@@ -396,8 +396,8 @@ def atualizar_admin_permissoes():
 
 def carregar_usuario(nome):
     df = pd.read_sql_query(
-        "SELECT * FROM usuarios WHERE nome = ? AND ativo = 'Sim'",
-        conn,
+        "SELECT * FROM usuarios WHERE nome = %s AND ativo = 'Sim'",
+        get_engine(),
         params=(nome,)
     )
     if df.empty:
@@ -842,8 +842,7 @@ def status_data(data_txt, dias_alerta=30):
 
 def baixar_estoque(medicamento, quantidade_usada):
     med = pd.read_sql_query(
-        "SELECT * FROM farmacia WHERE medicamento = ?",
-        conn,
+        "SELECT * FROM farmacia WHERE medicamento = %s", get_engine(),
         params=(medicamento,)
     )
 
@@ -1236,7 +1235,7 @@ def verificar_e_disparar_alertas_auto():
             enviados += 1
         else:
             c.execute(
-                "UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = ?",
+                "UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = %s",
                 (erro, str(row["id"]))
             )
         conn.commit()
@@ -1859,8 +1858,7 @@ elif op == "Animais por Tipo":
             animal_id = escolha.split(" - ")[0]
 
             animal = pd.read_sql_query(
-                "SELECT * FROM animais WHERE id = ?",
-                conn,
+                "SELECT * FROM animais WHERE id = %s", get_engine(),
                 params=(animal_id,)
             ).iloc[0]
 
@@ -2167,8 +2165,7 @@ elif op == "Consulta ABQM":
             animal_nome = escolha.split(" - ")[0]
 
             animal_atual = pd.read_sql_query(
-                "SELECT * FROM animais WHERE nome = ?",
-                conn,
+                "SELECT * FROM animais WHERE nome = %s", get_engine(),
                 params=(animal_nome,)
             ).iloc[0]
 
@@ -2317,8 +2314,7 @@ elif op == "Importar NF-e / XML":
                         validade = str(row["validade"] or "")
 
                         existente = pd.read_sql_query(
-                            "SELECT * FROM farmacia WHERE medicamento = ?",
-                            conn,
+                            "SELECT * FROM farmacia WHERE medicamento = %s", get_engine(),
                             params=(produto_nome,)
                         )
 
@@ -2611,7 +2607,7 @@ elif op == "Farmácia":
             escolha = st.selectbox("Escolha o medicamento", df["descricao"].tolist())
             med_id = escolha.split(" - ")[0]
 
-            med = pd.read_sql_query("SELECT * FROM farmacia WHERE id = ?", conn, params=(med_id,)).iloc[0]
+            med = pd.read_sql_query("SELECT * FROM farmacia WHERE id = %s", get_engine(), params=(med_id,)).iloc[0]
 
             col1, col2 = st.columns(2)
 
@@ -2780,8 +2776,7 @@ elif op == "Veterinário / Tratamentos":
 
                 if medicamento != "Nenhum":
                     med_df = pd.read_sql_query(
-                        "SELECT * FROM farmacia WHERE medicamento = ?",
-                        conn,
+                        "SELECT * FROM farmacia WHERE medicamento = %s", get_engine(),
                         params=(medicamento,)
                     )
 
@@ -2886,8 +2881,7 @@ elif op == "Veterinário / Tratamentos":
                         erros_estoque = []
                         for item in st.session_state.medicacoes_ficha_temp:
                             med_df = pd.read_sql_query(
-                                "SELECT * FROM farmacia WHERE medicamento = ?",
-                                conn,
+                                "SELECT * FROM farmacia WHERE medicamento = %s", get_engine(),
                                 params=(item["medicamento"],)
                             )
 
@@ -3045,7 +3039,7 @@ elif op == "Veterinário / Tratamentos":
             ficha_id = escolha.split(" - ")[0]
 
             ficha = fichas[fichas["id"].astype(str) == ficha_id].iloc[0]
-            meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE ficha_id = ? ORDER BY data_hora", conn, params=(ficha_id,))
+            meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE ficha_id = %s ORDER BY data_hora", get_engine(), params=(ficha_id,))
 
             st.markdown(f"### Ficha médica nº {ficha_id}")
             st.write(f"**Animal:** {ficha.get('animal', '')}")
@@ -3388,7 +3382,7 @@ elif op == "Vendas de Animais":
             vendas["descricao"] = vendas["id"].astype(str) + " - " + vendas["animal"] + " - " + vendas["comprador_nome"]
             esc = st.selectbox("Escolha a venda", vendas["descricao"].tolist())
             venda_id = esc.split(" - ")[0]
-            venda = pd.read_sql_query("SELECT * FROM vendas WHERE id = ?", conn, params=(venda_id,)).iloc[0]
+            venda = pd.read_sql_query("SELECT * FROM vendas WHERE id = %s", get_engine(), params=(venda_id,)).iloc[0]
 
             if st.button("Gerar Contrato PDF"):
                 buffer = BytesIO()
@@ -3550,8 +3544,7 @@ elif op == "Funcionários":
             funcionario_id = escolha.split(" - ")[0]
 
             funcionario = pd.read_sql_query(
-                "SELECT * FROM funcionarios WHERE id = ?",
-                conn,
+                "SELECT * FROM funcionarios WHERE id = %s", get_engine(),
                 params=(funcionario_id,)
             ).iloc[0]
 
@@ -3949,8 +3942,8 @@ jobs:
 elif op == "Relatórios / Gráficos":
     titulo_pagina("📊 Relatórios / Gráficos", "Análises gerenciais do haras")
 
-    tratamentos = pd.read_sql_query("SELECT animal, tipo, custo_total FROM tratamentos WHERE animal IS NOT NULL", conn)
-    sanitario = pd.read_sql_query("SELECT animal, tipo, custo_total FROM sanitario WHERE animal IS NOT NULL", conn)
+    tratamentos = pd.read_sql_query("SELECT animal, tipo, custo_total FROM tratamentos WHERE animal IS NOT NULL", get_engine())
+    sanitario = pd.read_sql_query("SELECT animal, tipo, custo_total FROM sanitario WHERE animal IS NOT NULL", get_engine())
 
     frames = []
     if not tratamentos.empty:
@@ -4060,8 +4053,7 @@ elif op == "Admin / Usuários":
                 st.error("Informe nome e senha.")
 
             existente = pd.read_sql_query(
-                "SELECT * FROM usuarios WHERE nome = ?",
-                conn,
+                "SELECT * FROM usuarios WHERE nome = %s", get_engine(),
                 params=(nome_usuario,)
             )
 
@@ -4082,14 +4074,14 @@ elif op == "Admin / Usuários":
             st.success("Usuário cadastrado com sucesso!")
 
     elif aba == "Usuários Cadastrados":
-        df = pd.read_sql_query("SELECT id, nome, perfil, permissoes, ativo FROM usuarios", conn)
+        df = pd.read_sql_query("SELECT id, nome, perfil, permissoes, ativo FROM usuarios", get_engine())
 
         if not df.empty:
             st.dataframe(df, use_container_width=True)
 
             st.markdown("### Editar usuário")
             usuario_id = st.selectbox("ID do usuário", df["id"].astype(str).tolist())
-            usuario = pd.read_sql_query("SELECT * FROM usuarios WHERE id = ?", conn, params=(usuario_id,)).iloc[0]
+            usuario = pd.read_sql_query("SELECT * FROM usuarios WHERE id = %s", get_engine(), params=(usuario_id,)).iloc[0]
 
             col1, col2 = st.columns(2)
 
@@ -4132,7 +4124,7 @@ elif op == "Admin / Usuários":
             st.warning("Nenhum usuário cadastrado.")
 
     elif aba == "Alterar Senha":
-        df = pd.read_sql_query("SELECT id, nome FROM usuarios", conn)
+        df = pd.read_sql_query("SELECT id, nome FROM usuarios", get_engine())
 
         if not df.empty:
             usuario_id = st.selectbox("Usuário", df["id"].astype(str).tolist())
@@ -4143,7 +4135,7 @@ elif op == "Admin / Usuários":
                     st.error("Informe a nova senha.")
 
                 c.execute(
-                    "UPDATE usuarios SET senha_hash = ? WHERE id = ?",
+                    "UPDATE usuarios SET senha_hash = ? WHERE id = %s",
                     (hash_senha(nova_senha), usuario_id)
                 )
                 conn.commit()
@@ -4162,11 +4154,11 @@ elif op == "Gerar PDF":
     if not animais.empty:
         animal_nome = st.selectbox("Escolha o animal", animais["nome"].tolist())
 
-        animal = pd.read_sql_query("SELECT * FROM animais WHERE nome = ?", conn, params=(animal_nome,)).iloc[0]
-        pesagens = pd.read_sql_query("SELECT * FROM pesagens WHERE animal = ?", conn, params=(animal_nome,))
-        sanitario = pd.read_sql_query("SELECT * FROM sanitario WHERE animal = ?", conn, params=(animal_nome,))
-        tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal = ?", conn, params=(animal_nome,))
-        vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal = ?", conn, params=(animal_nome,))
+        animal = pd.read_sql_query("SELECT * FROM animais WHERE nome = %s", get_engine(), params=(animal_nome,)).iloc[0]
+        pesagens = pd.read_sql_query("SELECT * FROM pesagens WHERE animal = %s", get_engine(), params=(animal_nome,))
+        sanitario = pd.read_sql_query("SELECT * FROM sanitario WHERE animal = %s", get_engine(), params=(animal_nome,))
+        tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal = %s", get_engine(), params=(animal_nome,))
+        vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal = %s", get_engine(), params=(animal_nome,))
 
         if st.button("Gerar PDF"):
             _init_fonte_pdf()
