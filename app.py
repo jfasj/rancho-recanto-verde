@@ -2843,113 +2843,139 @@ elif op == "Consulta ABQM":
 
     # ── PREENCHER POR IA ────────────────────────────────────
     elif aba == "🤖 Preencher por IA":
-        titulo_pagina("🤖 Preencher por IA", "Cole o texto da página ABQM e a IA extrai todos os dados automaticamente")
+        titulo_pagina("📄 Importar PDF / Texto ABQM", "Faça upload do PDF ou cole o texto da ficha ABQM")
 
         st.markdown("""
 <div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.2);border-radius:12px;padding:16px;margin-bottom:16px">
-  <div style="font-size:0.88rem;color:#d4c9b0;font-weight:500;margin-bottom:8px">📋 Como usar em 3 passos:</div>
-  <div style="font-size:0.82rem;color:#7a8fa3;line-height:1.8">
-    1. Acesse <strong style="color:#d4af50">consulta.abqm.com.br</strong> e encontre o animal<br>
-    2. Selecione todo o texto da página (Ctrl+A) e copie (Ctrl+C)<br>
-    3. Cole abaixo e clique em <strong style="color:#d4af50">Extrair com IA</strong>
+  <div style="font-size:0.88rem;color:#d4c9b0;font-weight:500;margin-bottom:8px">📋 Como usar:</div>
+  <div style="font-size:0.82rem;color:#7a8fa3;line-height:1.9">
+    <strong style="color:#d4af50">Opção 1 — PDF:</strong> Salve a ficha do animal da ABQM como PDF e faça upload abaixo<br>
+    <strong style="color:#d4af50">Opção 2 — Texto:</strong> Acesse <strong style="color:#d4af50">consulta.abqm.com.br</strong>, selecione todo o texto (Ctrl+A), copie (Ctrl+C) e cole abaixo<br>
+    O sistema extrai automaticamente: nome, registro, pai, mãe, avós, pelagem, criador e proprietário
   </div>
 </div>
 """, unsafe_allow_html=True)
 
         if animais_abqm.empty:
             st.warning("Cadastre um animal primeiro para vincular os dados.")
+            animal_ia = None
         else:
             animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"]
             escolha_ia = st.selectbox("Vincular ao animal", animais_abqm["descricao"].tolist(), key="ia_animal")
             animal_ia = escolha_ia.split(" - ")[0]
 
-        texto_abqm = st.text_area(
-            "Cole aqui o texto copiado da página ABQM",
-            height=200,
-            placeholder="Cole o texto completo da ficha do animal no site da ABQM..."
-        )
+        modo = st.radio("Modo de entrada", ["📄 Upload de PDF", "📋 Colar texto"], horizontal=True)
+        texto_extraido = ""
 
-        if st.button("🤖 Extrair dados com IA", use_container_width=True, disabled=not texto_abqm):
-            with st.spinner("Analisando texto com IA..."):
+        if modo == "📄 Upload de PDF":
+            pdf_file = st.file_uploader("Faça upload do PDF da ficha ABQM", type=["pdf"])
+            if pdf_file:
                 try:
-                    prompt = f"""Analise o texto abaixo copiado do site da ABQM (Associação Brasileira de Quarto de Milha) e extraia os dados do animal em formato JSON.
-
-Texto:
-{texto_abqm}
-
-Retorne APENAS um JSON válido com estas chaves (deixe vazio "" se não encontrar):
-{{
-  "registro_abqm": "",
-  "nome_oficial": "",
-  "pai": "",
-  "reg_pai": "",
-  "mae": "",
-  "reg_mae": "",
-  "avo_paterno": "",
-  "reg_avo_paterno": "",
-  "avo_materno": "",
-  "reg_avo_materno": "",
-  "bisavo_pp": "",
-  "bisavo_pm": "",
-  "bisavo_mp": "",
-  "bisavo_mm": "",
-  "pelagem": "",
-  "nascimento": "",
-  "sexo": "",
-  "criador": "",
-  "proprietario": "",
-  "modalidade": "",
-  "observacoes": ""
-}}
-
-Responda APENAS com o JSON, sem texto adicional."""
-
-                    import json
-                    resp = __import__('requests').post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers={"Content-Type": "application/json"},
-                        json={
-                            "model": "claude-sonnet-4-20250514",
-                            "max_tokens": 1000,
-                            "messages": [{"role": "user", "content": prompt}]
-                        }
-                    )
-                    raw = resp.json()["content"][0]["text"].strip()
-                    raw = raw.replace("```json", "").replace("```", "").strip()
-                    dados = json.loads(raw)
-                    st.session_state["abqm_ia_dados"] = dados
-                    st.session_state["abqm_ia_animal"] = animal_ia
-                    st.success("✅ Dados extraídos! Revise abaixo e salve.")
+                    import io as _io
+                    pdf_bytes = pdf_file.read()
+                    try:
+                        from pdfminer.high_level import extract_text as _pdfext
+                        texto_extraido = _pdfext(_io.BytesIO(pdf_bytes))
+                    except ImportError:
+                        try:
+                            import pypdf as _pypdf
+                            reader = _pypdf.PdfReader(_io.BytesIO(pdf_bytes))
+                            texto_extraido = "\n".join(p.extract_text() or "" for p in reader.pages)
+                        except ImportError:
+                            try:
+                                import PyPDF2 as _PyPDF2
+                                reader = _PyPDF2.PdfReader(_io.BytesIO(pdf_bytes))
+                                texto_extraido = "\n".join(p.extract_text() or "" for p in reader.pages)
+                            except Exception:
+                                st.error("Biblioteca de PDF não encontrada. Use a opção Colar texto.")
+                    if texto_extraido:
+                        st.success(f"✅ PDF lido! {len(texto_extraido)} caracteres extraídos.")
+                        with st.expander("Ver texto extraído"):
+                            st.text(texto_extraido[:2000])
                 except Exception as e:
-                    st.error(f"Erro ao processar com IA: {e}")
+                    st.error(f"Erro ao ler PDF: {e}")
+        else:
+            texto_extraido = st.text_area(
+                "Cole aqui o texto copiado da página ABQM",
+                height=200,
+                placeholder="Cole o texto completo da ficha do animal no site da ABQM..."
+            )
 
-        # Mostra campos preenchidos para revisão
+        def _extrair_dados_abqm(texto):
+            import re as _re
+            linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+            dados = {k: "" for k in [
+                "registro_abqm","nome_oficial","pai","reg_pai","mae","reg_mae",
+                "avo_paterno","reg_avo_paterno","avo_materno","reg_avo_materno",
+                "bisavo_pp","bisavo_pm","bisavo_mp","bisavo_mm",
+                "pelagem","nascimento","sexo","criador","proprietario","modalidade"
+            ]}
+            regs = []
+            for l in linhas:
+                if _re.match(r'^\d{5,7}$', l):
+                    regs.append(l)
+            if len(regs) > 0: dados["registro_abqm"] = regs[0]
+            if len(regs) > 1: dados["reg_pai"] = regs[1]
+            if len(regs) > 2: dados["reg_mae"] = regs[2]
+            mapa = {"PELAGEM":"pelagem","COR":"pelagem","NASCIMENTO":"nascimento",
+                    "CRIADOR":"criador","PROPRIETÁRIO":"proprietario",
+                    "PROPRIETARIO":"proprietario","MODALIDADE":"modalidade","SEXO":"sexo"}
+            for i, l in enumerate(linhas):
+                lu = l.upper()
+                for kw, campo in mapa.items():
+                    if kw in lu and not dados[campo]:
+                        partes = l.split(":")
+                        if len(partes) > 1 and partes[1].strip():
+                            dados[campo] = partes[1].strip()
+                        elif i + 1 < len(linhas):
+                            dados[campo] = linhas[i+1]
+                if ("PAI" == lu or lu.startswith("PAI ") or lu.startswith("PAI:")) and not dados["pai"]:
+                    if i+1 < len(linhas): dados["pai"] = linhas[i+1]
+                if ("MAE" == lu or "MÃE" == lu or lu.startswith("MÃE") or lu.startswith("MAE")) and not dados["mae"]:
+                    if i+1 < len(linhas): dados["mae"] = linhas[i+1]
+                if ("AVÔ" in lu or "AVO" in lu) and "PAT" in lu and not dados["avo_paterno"]:
+                    if i+1 < len(linhas): dados["avo_paterno"] = linhas[i+1]
+                if ("AVÓ" in lu or "AVO" in lu) and "MAT" in lu and not dados["avo_materno"]:
+                    if i+1 < len(linhas): dados["avo_materno"] = linhas[i+1]
+            for l in linhas:
+                if l.isupper() and len(l) > 5 and not l.isdigit() and l not in ("ABQM","HARAS","REGISTRO","FICHA") and not dados["nome_oficial"]:
+                    dados["nome_oficial"] = l
+                    break
+            return dados
+
+        if texto_extraido and st.button("🔍 Extrair dados automaticamente", use_container_width=True):
+            with st.spinner("Analisando ficha ABQM..."):
+                dados = _extrair_dados_abqm(texto_extraido)
+                st.session_state["abqm_ia_dados"] = dados
+                st.session_state["abqm_ia_animal"] = animal_ia
+                preenchidos = sum(1 for v in dados.values() if v)
+                st.success(f"✅ {preenchidos} campos identificados! Revise abaixo e salve.")
+
         if "abqm_ia_dados" in st.session_state:
             dados = st.session_state["abqm_ia_dados"]
             st.markdown("### ✏️ Revise e confirme os dados extraídos")
-
             col1, col2 = st.columns(2)
             with col1:
-                d_registro   = st.text_input("Registro ABQM",    value=dados.get("registro_abqm", ""),   key="d_reg")
-                d_nome       = st.text_input("Nome oficial",      value=dados.get("nome_oficial", ""),    key="d_nome")
-                d_pai        = st.text_input("Pai",               value=dados.get("pai", ""),              key="d_pai")
-                d_reg_pai    = st.text_input("Registro do Pai",   value=dados.get("reg_pai", ""),          key="d_rpai")
-                d_mae        = st.text_input("Mãe",               value=dados.get("mae", ""),              key="d_mae")
-                d_reg_mae    = st.text_input("Registro da Mãe",   value=dados.get("reg_mae", ""),          key="d_rmae")
-                d_pelagem    = st.text_input("Pelagem",            value=dados.get("pelagem", ""),          key="d_pel")
-                d_modalidade = st.text_input("Modalidade",         value=dados.get("modalidade", ""),       key="d_mod")
+                d_registro   = st.text_input("Registro ABQM",   value=dados.get("registro_abqm",""), key="d_reg")
+                d_nome       = st.text_input("Nome oficial",     value=dados.get("nome_oficial",""),  key="d_nome")
+                d_pai        = st.text_input("Pai",              value=dados.get("pai",""),            key="d_pai")
+                d_reg_pai    = st.text_input("Registro do Pai",  value=dados.get("reg_pai",""),        key="d_rpai")
+                d_mae        = st.text_input("Mãe",              value=dados.get("mae",""),            key="d_mae")
+                d_reg_mae    = st.text_input("Registro da Mãe",  value=dados.get("reg_mae",""),        key="d_rmae")
+                d_pelagem    = st.text_input("Pelagem",           value=dados.get("pelagem",""),        key="d_pel")
+                d_modalidade = st.text_input("Modalidade",        value=dados.get("modalidade",""),    key="d_mod")
             with col2:
-                d_avo_pat    = st.text_input("Avô Paterno",       value=dados.get("avo_paterno", ""),      key="d_avopat")
-                d_avo_pat_r  = st.text_input("Reg. Avô Paterno",  value=dados.get("reg_avo_paterno", ""),  key="d_avopat_r")
-                d_avo_mat    = st.text_input("Avó Materna",       value=dados.get("avo_materno", ""),      key="d_avomat")
-                d_avo_mat_r  = st.text_input("Reg. Avó Materna",  value=dados.get("reg_avo_materno", ""),  key="d_avomat_r")
-                d_bisavo_pp  = st.text_input("Bisavô Pat-Pat",    value=dados.get("bisavo_pp", ""),        key="d_bpp")
-                d_bisavo_pm  = st.text_input("Bisavô Pat-Mat",    value=dados.get("bisavo_pm", ""),        key="d_bpm")
-                d_bisavo_mp  = st.text_input("Bisavô Mat-Pat",    value=dados.get("bisavo_mp", ""),        key="d_bmp")
-                d_bisavo_mm  = st.text_input("Bisavô Mat-Mat",    value=dados.get("bisavo_mm", ""),        key="d_bmm")
-                d_nascimento = st.text_input("Nascimento",        value=dados.get("nascimento", ""),       key="d_nasc")
-                d_criador    = st.text_input("Criador",           value=dados.get("criador", ""),          key="d_cri")
-                d_prop       = st.text_input("Proprietário",      value=dados.get("proprietario", ""),     key="d_prop")
+                d_avo_pat    = st.text_input("Avô Paterno",      value=dados.get("avo_paterno",""),    key="d_avopat")
+                d_avo_pat_r  = st.text_input("Reg. Avô Paterno", value=dados.get("reg_avo_paterno",""),key="d_avopat_r")
+                d_avo_mat    = st.text_input("Avó Materna",      value=dados.get("avo_materno",""),    key="d_avomat")
+                d_avo_mat_r  = st.text_input("Reg. Avó Materna", value=dados.get("reg_avo_materno",""),key="d_avomat_r")
+                d_bisavo_pp  = st.text_input("Bisavô Pat-Pat",   value=dados.get("bisavo_pp",""),      key="d_bpp")
+                d_bisavo_pm  = st.text_input("Bisavô Pat-Mat",   value=dados.get("bisavo_pm",""),      key="d_bpm")
+                d_bisavo_mp  = st.text_input("Bisavô Mat-Pat",   value=dados.get("bisavo_mp",""),      key="d_bmp")
+                d_bisavo_mm  = st.text_input("Bisavô Mat-Mat",   value=dados.get("bisavo_mm",""),      key="d_bmm")
+                d_nascimento = st.text_input("Nascimento",       value=dados.get("nascimento",""),     key="d_nasc")
+                d_criador    = st.text_input("Criador",          value=dados.get("criador",""),        key="d_cri")
+                d_prop       = st.text_input("Proprietário",     value=dados.get("proprietario",""),   key="d_prop")
 
             if st.button("💾 Salvar todos os dados no animal", use_container_width=True):
                 c.execute("""
@@ -2964,14 +2990,10 @@ Responda APENAS com o JSON, sem texto adicional."""
                         criador_abqm=%s, proprietario_abqm=%s
                     WHERE nome = %s
                 """, (
-                    d_registro, d_nome,
-                    d_pai, d_reg_pai, d_mae, d_reg_mae,
-                    d_pelagem, d_modalidade,
-                    d_avo_pat, d_avo_pat_r,
-                    d_avo_mat, d_avo_mat_r,
-                    d_bisavo_pp, d_bisavo_pm,
-                    d_bisavo_mp, d_bisavo_mm,
-                    d_criador, d_prop,
+                    d_registro, d_nome, d_pai, d_reg_pai, d_mae, d_reg_mae,
+                    d_pelagem, d_modalidade, d_avo_pat, d_avo_pat_r,
+                    d_avo_mat, d_avo_mat_r, d_bisavo_pp, d_bisavo_pm,
+                    d_bisavo_mp, d_bisavo_mm, d_criador, d_prop,
                     st.session_state["abqm_ia_animal"]
                 ))
                 c.execute("""
@@ -2983,16 +3005,18 @@ Responda APENAS com o JSON, sem texto adicional."""
                     st.session_state["abqm_ia_animal"],
                     d_registro, d_nome, d_pai, d_mae, d_pelagem,
                     d_nascimento, d_criador, d_prop,
-                    "Extraído via IA",
+                    "Extraído via PDF/Texto",
                     datetime.now().strftime("%d/%m/%Y %H:%M")
                 ))
                 conn.commit()
                 listar_animais.clear()
                 del st.session_state["abqm_ia_dados"]
-                st.success(f"✅ Dados do animal salvos com sucesso incluindo genealogia completa!")
+                st.success("✅ Dados salvos com sucesso incluindo genealogia completa!")
                 st.rerun()
 
     # ── ÁRVORE GENEALÓGICA ─────────────────────────────────
+    elif aba == "🌳 Árvore Genealógica":
+        titulo_pagina("🌳 Árvore Genealógica", "Visualização da linhagem do animal")
     elif aba == "🌳 Árvore Genealógica":
         titulo_pagina("🌳 Árvore Genealógica", "Visualização da linhagem do animal")
 
