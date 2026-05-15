@@ -107,20 +107,21 @@ def get_connection():
     """Conecta ao Supabase via SESSION POOLER (compatível com IPv4/Streamlit Cloud)."""
     db_url = get_secret_value_early("DATABASE_URL")
     if not db_url:
-        st.error("DATABASE_URL não configurada nos Secrets do Streamlit.")
+        st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
         st.stop()
-    conn = psycopg2.connect(
-        db_url,
-        cursor_factory=psycopg2.extras.RealDictCursor,
-        sslmode="require",
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=10,
-        keepalives_count=5,
-        connect_timeout=10,
-    )
-    conn.autocommit = False
-    return conn
+    try:
+        conn = psycopg2.connect(
+            db_url,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            sslmode="require",
+            connect_timeout=15,
+        )
+        conn.autocommit = False
+        return conn
+    except Exception as e:
+        st.error(f"❌ Erro ao conectar ao banco de dados: {e}")
+        st.info("Verifique a DATABASE_URL nos Secrets do Streamlit Cloud.")
+        st.stop()
 
 
 def reconectar_se_necessario():
