@@ -2901,9 +2901,34 @@ elif op == "Consulta ABQM":
                 placeholder="Cole o texto completo da ficha do animal no site da ABQM..."
             )
 
+        def _normalizar_pdf_abqm(texto):
+            """
+            Corrige texto do pypdf que separa cada letra com espaço.
+            'R O A N S  O F  F L I N G' → 'ROANS OF FLING'
+            Linhas normais: apenas normaliza espaços duplos.
+            """
+            import re as _r
+            linhas_out = []
+            for linha in texto.splitlines():
+                l = linha.strip()
+                # Detecta linha letra-por-letra: maioria dos tokens tem 1 char
+                tokens = l.replace('  ', ' ').split(' ')
+                qtd_isolados = sum(1 for t in tokens if len(t) == 1 and t.isalnum())
+                if qtd_isolados >= 4 and qtd_isolados > len(tokens) * 0.5:
+                    # Remove espaço simples entre letras/nums (espaço duplo = separador de palavra)
+                    l = _r.sub(r'(?<=[A-Z0-9]) (?=[A-Z0-9])', '', l)
+                    l = _r.sub(r'  +', ' ', l).strip()
+                else:
+                    # Apenas normaliza espaços duplos para simples
+                    l = _r.sub(r'  +', ' ', l).strip()
+                linhas_out.append(l)
+            return "\n".join(linhas_out)
+
         def _extrair_dados_abqm(texto):
             import re as _re
-            linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+            # Normaliza espaços espúrios do pypdf (R O A N S → ROANS)
+            texto = _normalizar_pdf_abqm(texto)
+            linhas = [_re.sub(r'\s+', ' ', l).strip() for l in texto.splitlines() if l.strip()]
             dados = {k: "" for k in [
                 "registro_abqm","nome_oficial","pai","reg_pai","mae","reg_mae",
                 "avo_paterno","reg_avo_paterno","avo_materno","reg_avo_materno",
