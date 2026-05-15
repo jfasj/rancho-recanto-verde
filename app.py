@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 try:
     import psycopg2
     import psycopg2.extras
+    from sqlalchemy import create_engine
     _PG_OK = True
 except ImportError:
     _PG_OK = False
@@ -122,6 +123,16 @@ def get_connection():
         st.error(f"❌ Erro ao conectar ao banco de dados: {e}")
         st.info("Verifique a DATABASE_URL nos Secrets do Streamlit Cloud.")
         st.stop()
+
+
+@st.cache_resource
+def get_engine():
+    """SQLAlchemy engine para uso com pd.read_sql_query."""
+    db_url = get_secret_value_early("DATABASE_URL")
+    # Garantir prefixo correto para SQLAlchemy
+    if db_url and db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return create_engine(db_url, connect_args={"sslmode": "require"})
 
 
 def reconectar_se_necessario():
@@ -353,7 +364,7 @@ def _get_secret_early(nome, padrao=""):
 
 
 def criar_admin_padrao():
-    usuarios = pd.read_sql_query("SELECT * FROM usuarios WHERE nome IS NOT NULL AND nome != ''", conn)
+    usuarios = pd.read_sql_query("SELECT * FROM usuarios WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if usuarios.empty:
         c.execute("""
             INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
@@ -807,14 +818,14 @@ def moeda(valor):
 
 
 def listar_animais(somente_ativos=False):
-    df = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", conn)
+    df = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if somente_ativos and not df.empty and "status" in df.columns:
         df = df[df["status"].fillna("").str.upper() != "VENDIDO"]
     return df
 
 
 def listar_farmacia():
-    return pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", conn)
+    return pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", get_engine())
 
 
 def status_data(data_txt, dias_alerta=30):
@@ -1316,7 +1327,7 @@ def recalcular_farmacia_por_descricao(somente_volume_igual_1=True):
     Reprocessa medicamentos já importados para identificar automaticamente volume pela descrição.
     Útil para corrigir itens antigos que entraram como 1 mL.
     """
-    df = pd.read_sql_query("SELECT * FROM farmacia", conn)
+    df = pd.read_sql_query("SELECT * FROM farmacia", get_engine())
     if df.empty:
         return 0
 
@@ -1368,7 +1379,7 @@ def recalcular_farmacia_por_descricao(somente_volume_igual_1=True):
 
 def atualizar_farmacia_antiga_para_controle():
     try:
-        df = pd.read_sql_query("SELECT * FROM farmacia", conn)
+        df = pd.read_sql_query("SELECT * FROM farmacia", get_engine())
         if df.empty:
             return
 
@@ -1552,13 +1563,13 @@ st.markdown("---")
 # =========================================================
 
 if op == "Dashboard":
-    animais = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", conn)
-    farmacia = pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", conn)
-    sanitario = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", conn)
-    tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", conn)
-    vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", conn)
-    recebimentos = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", conn)
-    receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", conn)
+    animais = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
+    farmacia = pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", get_engine())
+    sanitario = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", get_engine())
+    tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", get_engine())
+    vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", get_engine())
+    recebimentos = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", get_engine())
+    receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", get_engine())
 
     total_animais = len(animais)
     total_equinos = len(animais[animais["tipo"] == "Equino"]) if not animais.empty else 0
@@ -1973,7 +1984,7 @@ elif op == "Pesagem / Evolução":
                 st.success("Pesagem registrada com sucesso!")
 
     elif aba == "Histórico de Pesagens":
-        df = pd.read_sql_query("SELECT * FROM pesagens WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM pesagens WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             filtro = st.selectbox("Filtrar por tipo", ["Todos"] + tipos)
@@ -2080,7 +2091,7 @@ elif op == "Controle Sanitário":
                 st.success(f"{procedimento} registrada. Estoque baixado. Custo: {moeda(custo_total)}")
 
     elif aba == "Alertas Sanitários":
-        df = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             df["status"] = df["proxima_dose"].apply(lambda x: status_data(x, 30))
@@ -2097,7 +2108,7 @@ elif op == "Controle Sanitário":
             st.warning("Nenhuma aplicação sanitária registrada.")
 
     elif aba == "Histórico Sanitário":
-        df = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             col1, col2 = st.columns(2)
@@ -2206,7 +2217,7 @@ elif op == "Consulta ABQM":
                 st.success("Dados ABQM salvos e vinculados ao animal!")
 
     elif aba == "Histórico ABQM":
-        df = pd.read_sql_query("SELECT * FROM abqm_consultas WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM abqm_consultas WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             st.dataframe(df, use_container_width=True)
@@ -2430,7 +2441,7 @@ elif op == "Importar NF-e / XML":
     st.markdown("---")
     st.markdown("### Histórico de compras importadas")
 
-    hist = pd.read_sql_query("SELECT * FROM compras_nfe WHERE produto IS NOT NULL", conn)
+    hist = pd.read_sql_query("SELECT * FROM compras_nfe WHERE produto IS NOT NULL", get_engine())
     if not hist.empty:
         st.dataframe(hist, use_container_width=True)
         st.download_button(
@@ -3022,7 +3033,7 @@ elif op == "Veterinário / Tratamentos":
     # HISTÓRICO DE FICHAS
     # -----------------------------------------------------
     elif aba == "Histórico de Fichas":
-        fichas = pd.read_sql_query("SELECT * FROM fichas_medicas WHERE animal IS NOT NULL ORDER BY id DESC", conn)
+        fichas = pd.read_sql_query("SELECT * FROM fichas_medicas WHERE animal IS NOT NULL ORDER BY id DESC", get_engine())
 
         if fichas.empty:
             st.warning("Nenhuma ficha médica registrada.")
@@ -3062,7 +3073,7 @@ elif op == "Veterinário / Tratamentos":
     # MEDICAÇÕES AGENDADAS
     # -----------------------------------------------------
     elif aba == "Medicações Agendadas":
-        meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE medicamento IS NOT NULL ORDER BY data_hora", conn)
+        meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE medicamento IS NOT NULL ORDER BY data_hora", get_engine())
 
         if meds.empty:
             st.warning("Nenhuma medicação agendada.")
@@ -3170,7 +3181,7 @@ elif op == "Reprodução / Embriões":
             st.warning("Cadastre receptoras fêmeas do tipo Equino primeiro.")
         else:
             receptora = st.selectbox("Receptora", equinos_femeas["nome"].tolist())
-            doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", conn)
+            doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", get_engine())
 
             col1, col2 = st.columns(2)
             with col1:
@@ -3207,8 +3218,8 @@ elif op == "Reprodução / Embriões":
                 st.success("Controle da receptora salvo com sucesso!")
 
     elif aba == "Alertas Reprodutivos":
-        doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", conn)
-        receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", conn)
+        doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", get_engine())
+        receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", get_engine())
 
         st.markdown("### Alertas de Lavagem")
         if not doadoras.empty:
@@ -3236,11 +3247,11 @@ elif op == "Reprodução / Embriões":
 
     elif aba == "Histórico Reprodutivo":
         st.markdown("### Éguas Doadoras / Inseminadas")
-        doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", conn)
+        doadoras = pd.read_sql_query("SELECT * FROM doadoras WHERE egua_doadora IS NOT NULL", get_engine())
         st.dataframe(doadoras, use_container_width=True)
 
         st.markdown("### Receptoras")
-        receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", conn)
+        receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", get_engine())
         st.dataframe(receptoras, use_container_width=True)
 
 
@@ -3326,7 +3337,7 @@ elif op == "Vendas de Animais":
                 st.success("Venda salva e parcelas geradas com sucesso!")
 
     elif aba == "Recebimentos":
-        df = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             df["valor_num"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0)
@@ -3355,7 +3366,7 @@ elif op == "Vendas de Animais":
             st.warning("Nenhum recebimento cadastrado.")
 
     elif aba == "Histórico de Vendas":
-        df = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", conn)
+        df = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", get_engine())
 
         if not df.empty:
             st.dataframe(df, use_container_width=True)
@@ -3369,7 +3380,7 @@ elif op == "Vendas de Animais":
             st.warning("Nenhuma venda cadastrada.")
 
     elif aba == "Contrato PDF":
-        vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", conn)
+        vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", get_engine())
 
         if vendas.empty:
             st.warning("Cadastre uma venda primeiro.")
@@ -3494,7 +3505,7 @@ elif op == "Funcionários":
             st.success("Funcionário cadastrado com sucesso!")
 
     elif aba == "Funcionários Cadastrados":
-        df = pd.read_sql_query("SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != ''", conn)
+        df = pd.read_sql_query("SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != ''", get_engine())
 
         if not df.empty:
             col1, col2 = st.columns(2)
@@ -3529,7 +3540,7 @@ elif op == "Funcionários":
             st.warning("Nenhum funcionário cadastrado.")
 
     elif aba == "Alterar Funcionário":
-        df = pd.read_sql_query("SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != ''", conn)
+        df = pd.read_sql_query("SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != ''", get_engine())
 
         if df.empty:
             st.warning("Nenhum funcionário cadastrado.")
@@ -3810,7 +3821,7 @@ jobs:
 
     elif aba == "Alertas de Medicação 1h Antes":
         st.markdown("### Medicações dentro da janela de 1 hora")
-        df = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada'", conn)
+        df = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada'", get_engine())
 
         if df.empty:
             st.info("Nenhuma medicação agendada.")
@@ -3914,8 +3925,8 @@ jobs:
                     st.error(f"Erro ao enviar: {erro}")
 
     elif aba == "Histórico de Alertas":
-        df_alertas = pd.read_sql_query("SELECT * FROM alertas_whatsapp WHERE funcionario IS NOT NULL", conn)
-        df_medicacoes = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE animal IS NOT NULL", conn)
+        df_alertas = pd.read_sql_query("SELECT * FROM alertas_whatsapp WHERE funcionario IS NOT NULL", get_engine())
+        df_medicacoes = pd.read_sql_query("SELECT * FROM medicacoes_agendadas WHERE animal IS NOT NULL", get_engine())
 
         st.markdown("### Histórico de alertas WhatsApp")
         if not df_alertas.empty:
@@ -3972,7 +3983,7 @@ elif op == "Relatórios / Gráficos":
     st.markdown("---")
     st.markdown("### 🐾 Animais por tipo")
 
-    animais_rel = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", conn)
+    animais_rel = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if not animais_rel.empty:
         resumo_tipo = animais_rel.groupby("tipo").size().reset_index(name="quantidade")
         st.bar_chart(resumo_tipo.set_index("tipo"))
@@ -3983,8 +3994,8 @@ elif op == "Relatórios / Gráficos":
     st.markdown("---")
     st.markdown("### 💰 Vendas e recebimentos")
 
-    vendas_rel = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", conn)
-    receb_rel = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", conn)
+    vendas_rel = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", get_engine())
+    receb_rel = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", get_engine())
 
     col_v1, col_v2, col_v3 = st.columns(3)
 
