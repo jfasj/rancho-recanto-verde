@@ -242,6 +242,10 @@ _SCHEMA = {
         "mensagem", "status", "alerta_gerado", "data_alerta",
         "preco_unitario", "custo_total", "obs",
     ],
+    "agenda": [
+        "titulo", "tipo", "data", "hora_inicio", "hora_fim",
+        "animal", "funcionario", "descricao", "status", "cor", "obs",
+    ],
 }
 
 
@@ -294,6 +298,7 @@ _migrar_banco(conn)
 
 TODAS_PERMISSOES = [
     "Dashboard",
+    "Agenda",
     "Cadastrar Animal",
     "Animais por Tipo",
     "Pesagem / Evolução",
@@ -316,6 +321,7 @@ PERFIS = {
     "Administrador": TODAS_PERMISSOES,
     "Veterinário": [
         "Dashboard",
+        "Agenda",
         "Animais por Tipo",
         "Controle Sanitário",
         "Veterinário / Tratamentos",
@@ -325,6 +331,7 @@ PERFIS = {
     ],
     "Financeiro": [
         "Dashboard",
+        "Agenda",
         "Vendas de Animais",
         "Importar NF-e / XML",
         "Consulta ABQM",
@@ -334,6 +341,7 @@ PERFIS = {
     ],
     "Operacional": [
         "Dashboard",
+        "Agenda",
         "Cadastrar Animal",
         "Animais por Tipo",
         "Pesagem / Evolução",
@@ -428,24 +436,28 @@ if "admin_perms_atualizadas" not in st.session_state:
 st.markdown("""
 <style>
 /* ============================================================
-   RANCHO RECANTO VERDE — Design System v2
-   Paleta extraída da logomarca oficial
+   RANCHO RECANTO VERDE — Design System v3 (2026)
+   Inspirado nos melhores SaaS agro do mercado
+   Tipografia: Playfair Display + DM Sans via Google Fonts
    ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
+
 :root {
-    /* Cores base da logomarca */
-    --bg:        #06101e;   /* azul-marinho profundo */
-    --panel:     #0d1b2a;   /* painel primário */
-    --panel2:    #112036;   /* painel secundário */
-    --panel3:    #162840;   /* painel terciário / hover */
+    /* Escuro profundo — identidade do haras */
+    --bg:        #0a1628;
+    --panel:     #0d1f3c;
+    --panel2:    #0f2444;
+    --panel3:    #132c50;
 
-    /* Dourado da logomarca */
-    --gold:      #c9a84c;   /* champagne metálico principal */
-    --gold-l:    #e8c96d;   /* dourado claro / destaque */
-    --gold-d:    #9a7a2e;   /* dourado escuro / sombra */
-    --gold-bg:   rgba(201,168,76,0.10);
-    --gold-line: rgba(201,168,76,0.22);
+    /* Dourado premium */
+    --gold:      #d4af50;
+    --gold-l:    #e8ca7a;
+    --gold-d:    #9a7a28;
+    --gold-bg:   rgba(212,175,80,0.08);
+    --gold-line: rgba(212,175,80,0.15);
 
-    /* Verde do "Recanto Verde" */
+    /* Verde haras */
     --green-brand: #4a9e6b;
     --green-light: #5dbe82;
     --green-bg:    rgba(74,158,107,0.12);
@@ -457,135 +469,227 @@ st.markdown("""
     --blue:   #4a8fcf;
 
     /* Texto */
-    --text:   #f0f4f8;
-    --muted:  #8fa3b8;
-    --hint:   #4a6278;
-    --line:   rgba(201,168,76,0.18);
+    --text:   #e8e2d5;
+    --muted:  #7a8fa3;
+    --hint:   #3a5068;
+    --cream:  #d4c9b0;
+    --line:   rgba(212,175,80,0.12);
 }
+
+/* ── Fontes base ── */
+* { font-family: 'DM Sans', sans-serif !important; }
 
 /* ── Fundo global ── */
 .stApp {
-    background: #06101e;
+    background: var(--bg) !important;
     color: var(--text);
 }
+.main .block-container {
+    padding-top: 1.5rem !important;
+}
 
-/* ── Sidebar ── */
+/* ── Sidebar redesenhada ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #08131f 0%, #0d1b2a 100%);
-    border-right: 1px solid var(--gold-line);
+    background: var(--panel) !important;
+    border-right: 1px solid var(--gold-line) !important;
 }
 [data-testid="stSidebar"] * { color: var(--text) !important; }
+
+/* Itens do menu lateral */
 [data-testid="stSidebar"] [role="radiogroup"] label {
-    background: rgba(13,27,42,0.8);
-    border: 1px solid var(--gold-line);
-    border-radius: 12px;
-    padding: 9px 12px;
-    margin: 3px 0;
+    background: transparent;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 0 8px 8px 0;
+    padding: 10px 14px;
+    margin: 2px 8px 2px 0;
     transition: all .15s;
+    font-size: 0.88rem;
+    font-weight: 400;
+    color: var(--muted) !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
     background: var(--gold-bg);
-    border-color: rgba(201,168,76,0.4);
+    border-left-color: rgba(212,175,80,0.4);
+    color: var(--gold) !important;
 }
-[data-testid="stSidebar"] [role="radiogroup"] label[data-testid="stMarkdownContainer"] p {
-    font-weight: 600 !important;
+[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label,
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
+    background: rgba(212,175,80,0.1) !important;
+    border-left-color: var(--gold) !important;
+    color: var(--gold) !important;
+    font-weight: 500 !important;
 }
 
 /* ── Tipografia ── */
-h1, h2, h3 { color: var(--text); }
+h1, h2, h3 {
+    font-family: 'Playfair Display', serif !important;
+    color: var(--text);
+    font-weight: 500 !important;
+}
+h1 { font-size: 1.6rem !important; }
+h2 { font-size: 1.25rem !important; }
+h3 { font-size: 1.05rem !important; }
 label, p, span { color: var(--text); }
 hr { border: none; border-top: 1px solid var(--line); }
 
-/* ── Métricas ── */
+/* ── Métricas — cards mais refinados ── */
 div[data-testid="stMetric"] {
     background: var(--panel);
     border: 1px solid var(--gold-line);
-    border-radius: 16px;
-    padding: 16px 18px;
+    border-radius: 14px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
 }
-div[data-testid="stMetricLabel"] { color: var(--muted) !important; font-size: 0.85rem; }
-div[data-testid="stMetricValue"] { color: var(--text) !important; font-weight: 700; }
-div[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
+div[data-testid="stMetric"]::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--gold), transparent);
+}
+div[data-testid="stMetricLabel"] {
+    color: var(--muted) !important;
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    font-weight: 400 !important;
+}
+div[data-testid="stMetricValue"] {
+    color: var(--text) !important;
+    font-family: 'Playfair Display', serif !important;
+    font-weight: 500 !important;
+    font-size: 1.8rem !important;
+}
+div[data-testid="stMetricDelta"] { font-size: 0.78rem !important; }
 
 /* ── Botões ── */
 .stButton button,
 .stDownloadButton button {
-    background: linear-gradient(135deg, var(--gold-d), var(--gold));
-    color: #06101e !important;
-    border-radius: 12px;
-    font-weight: 700;
+    background: linear-gradient(135deg, var(--gold-d) 0%, var(--gold) 100%);
+    color: #0a1628 !important;
+    border-radius: 10px;
+    font-weight: 500;
     border: none;
-    padding: 0.6rem 1.1rem;
+    padding: 0.55rem 1.2rem;
+    font-size: 0.88rem;
     transition: all .18s;
+    letter-spacing: 0.01em;
 }
 .stButton button:hover,
 .stDownloadButton button:hover {
-    background: linear-gradient(135deg, var(--gold), var(--gold-l));
+    background: linear-gradient(135deg, var(--gold) 0%, var(--gold-l) 100%);
     transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(212,175,80,0.25);
+}
+.stButton button:active {
+    transform: translateY(0);
 }
 
 /* Botões em colunas (menu de abas) */
 div[data-testid="column"] .stButton button {
     min-height: 52px;
-    font-size: 1rem;
-    border-radius: 14px;
+    font-size: 0.92rem;
+    border-radius: 12px;
     border: 1px solid var(--gold-line) !important;
     background: var(--panel) !important;
     color: var(--text) !important;
+    font-weight: 400 !important;
+    letter-spacing: 0;
 }
 div[data-testid="column"] .stButton button:hover {
     background: linear-gradient(135deg, var(--gold-d), var(--gold)) !important;
-    color: #06101e !important;
+    color: #0a1628 !important;
     border-color: var(--gold) !important;
+    box-shadow: 0 4px 16px rgba(212,175,80,0.2) !important;
 }
 
-/* ── Inputs ── */
+/* ── Inputs refinados ── */
 input, textarea {
     background-color: var(--panel2) !important;
     color: var(--text) !important;
-    border-color: var(--gold-line) !important;
-    border-radius: 10px !important;
+    border: 1px solid rgba(212,175,80,0.18) !important;
+    border-radius: 9px !important;
+    font-size: 0.9rem !important;
+    transition: border-color .15s, box-shadow .15s;
 }
 input:focus, textarea:focus {
     border-color: var(--gold) !important;
-    box-shadow: 0 0 0 2px rgba(201,168,76,0.15) !important;
+    box-shadow: 0 0 0 3px rgba(212,175,80,0.1) !important;
+    outline: none !important;
 }
 div[data-baseweb="select"] > div {
-    background-color: var(--panel2);
-    border-radius: 10px;
-    border-color: var(--gold-line);
+    background-color: var(--panel2) !important;
+    border-radius: 9px !important;
+    border: 1px solid rgba(212,175,80,0.18) !important;
+    color: var(--text) !important;
+}
+div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--gold) !important;
+    box-shadow: 0 0 0 3px rgba(212,175,80,0.1) !important;
+}
+
+/* ── Radio buttons ── */
+div[role="radiogroup"] label {
+    background: var(--panel) !important;
+    border: 1px solid var(--gold-line) !important;
+    border-radius: 9px !important;
+    padding: 8px 14px !important;
+    transition: all .15s;
+    font-size: 0.88rem !important;
+}
+div[role="radiogroup"] label:hover {
+    border-color: rgba(212,175,80,0.4) !important;
+    background: var(--gold-bg) !important;
 }
 
 /* ── DataFrames ── */
 [data-testid="stDataFrame"] {
-    border-radius: 14px;
+    border-radius: 12px;
     overflow: hidden;
     border: 1px solid var(--gold-line);
 }
 
-/* ── Cards de dashboard ── */
+/* ── Cards dashboard ── */
 .card {
     background: var(--panel);
     border: 1px solid var(--gold-line);
-    border-radius: 16px;
-    padding: 18px;
+    border-radius: 14px;
+    padding: 20px;
     min-height: 100px;
-    transition: border-color .2s;
+    transition: border-color .2s, box-shadow .2s;
+    position: relative;
+    overflow: hidden;
 }
-.card:hover { border-color: rgba(201,168,76,0.45); }
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--gold), transparent);
+    border-radius: 14px 14px 0 0;
+}
+.card:hover {
+    border-color: rgba(212,175,80,0.35);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
 .card-title {
-    font-size: 0.78rem;
+    font-size: 0.7rem;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.1em;
+    font-weight: 400;
 }
 .card-value {
-    font-size: 1.8rem;
-    font-weight: 800;
+    font-family: 'Playfair Display', serif !important;
+    font-size: 2rem;
+    font-weight: 500;
     color: var(--text);
-    margin-top: 4px;
+    margin-top: 6px;
+    line-height: 1;
 }
-.card-sub { font-size: 0.84rem; color: var(--muted); margin-top: 4px; }
+.card-sub { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
 .card-value.gold { color: var(--gold); }
 .card-value.green { color: var(--green-brand); }
 .card-value.red { color: var(--red); }
@@ -594,37 +698,39 @@ div[data-baseweb="select"] > div {
 .app-grid-card {
     background: var(--panel);
     border: 1px solid var(--gold-line);
-    border-radius: 20px;
-    padding: 20px 14px;
-    min-height: 135px;
+    border-radius: 16px;
+    padding: 22px 14px;
+    min-height: 130px;
     text-align: center;
     margin-bottom: 12px;
     cursor: pointer;
-    transition: all .18s;
+    transition: all .2s;
+    position: relative;
 }
 .app-grid-card:hover {
     border-color: var(--gold);
     background: var(--panel2);
-    transform: translateY(-2px);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3), 0 0 0 1px rgba(212,175,80,0.2);
 }
-.app-grid-icon { font-size: 2.2rem; margin-bottom: 8px; }
-.app-grid-title { font-size: 0.98rem; font-weight: 700; color: var(--text); }
-.app-grid-subtitle { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+.app-grid-icon { font-size: 2rem; margin-bottom: 10px; }
+.app-grid-title { font-size: 0.95rem; font-weight: 500; color: var(--text); }
+.app-grid-subtitle { font-size: 0.78rem; color: var(--muted); margin-top: 4px; font-weight: 300; }
 
-/* ── Badge de status ── */
+/* ── Badges ── */
 .badge {
     display: inline-block;
-    font-size: 0.72rem;
-    font-weight: 700;
+    font-size: 0.68rem;
+    font-weight: 500;
     padding: 3px 10px;
     border-radius: 999px;
     letter-spacing: 0.04em;
 }
-.badge-ok      { background: var(--green-bg);           color: var(--green-brand); }
-.badge-warn    { background: rgba(232,184,75,0.14);     color: var(--yellow); }
-.badge-danger  { background: rgba(224,82,82,0.14);      color: var(--red); }
-.badge-info    { background: rgba(74,143,207,0.14);     color: var(--blue); }
-.badge-gold    { background: var(--gold-bg);            color: var(--gold); }
+.badge-ok      { background: var(--green-bg);           color: var(--green-brand);  border: 1px solid rgba(74,158,107,0.25); }
+.badge-warn    { background: rgba(232,184,75,0.12);     color: var(--yellow);        border: 1px solid rgba(232,184,75,0.25); }
+.badge-danger  { background: rgba(224,82,82,0.12);      color: var(--red);           border: 1px solid rgba(224,82,82,0.25); }
+.badge-info    { background: rgba(74,143,207,0.12);     color: var(--blue);          border: 1px solid rgba(74,143,207,0.25); }
+.badge-gold    { background: var(--gold-bg);            color: var(--gold);          border: 1px solid var(--gold-line); }
 
 /* ── Topbar ── */
 .topbar {
@@ -633,52 +739,71 @@ div[data-baseweb="select"] > div {
     align-items: center;
     background: var(--panel);
     border: 1px solid var(--gold-line);
-    border-radius: 16px;
-    padding: 12px 16px;
-    margin-bottom: 16px;
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
 }
-.topbar-title { font-weight: 800; color: var(--text); font-size: 1rem; }
-.topbar-menu  { display: flex; gap: 8px; flex-wrap: wrap; }
+.topbar-title {
+    font-family: 'Playfair Display', serif;
+    font-weight: 500;
+    color: var(--text);
+    font-size: 1rem;
+    letter-spacing: 0.01em;
+}
+.topbar-menu { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ── Pills / chips ── */
+/* ── Pills ── */
 .pill {
     border: 1px solid var(--gold-line);
     border-radius: 999px;
-    padding: 6px 12px;
+    padding: 5px 14px;
     background: var(--gold-bg);
-    color: var(--text);
-    font-weight: 600;
-    font-size: 0.88rem;
+    color: var(--gold);
+    font-weight: 500;
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
 }
 
-/* ── Seção títulos ── */
-.section-title    { font-size: 1.35rem; font-weight: 800; margin: 8px 0 4px; }
-.section-subtitle { color: var(--muted); margin-bottom: 18px; font-size: 0.9rem; }
+/* ── Títulos de seção ── */
+.section-title    {
+    font-family: 'Playfair Display', serif !important;
+    font-size: 1.3rem;
+    font-weight: 500;
+    margin: 10px 0 4px;
+    color: var(--text);
+}
+.section-subtitle { color: var(--muted); margin-bottom: 20px; font-size: 0.88rem; font-weight: 300; }
 
 /* ── Quick title (dashboard) ── */
-.quick-title    { font-size: 1.45rem; font-weight: 800; color: var(--text); margin-bottom: 2px; }
-.quick-subtitle { color: var(--muted); margin-bottom: 18px; font-size: 0.9rem; }
+.quick-title    {
+    font-family: 'Playfair Display', serif !important;
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.quick-subtitle { color: var(--muted); margin-bottom: 18px; font-size: 0.88rem; font-weight: 300; }
 
 /* ── Alert card ── */
 .alert-card {
     background: var(--panel);
     border: 1px solid var(--gold-line);
-    border-radius: 16px;
-    padding: 16px;
-    min-height: 240px;
+    border-radius: 14px;
+    padding: 18px;
 }
 
 /* ── Icon box ── */
 .icon-box {
-    width: 48px; height: 48px;
-    border-radius: 13px;
+    width: 46px; height: 46px;
+    border-radius: 12px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.7rem;
-    margin-right: 10px;
+    font-size: 1.5rem;
+    margin-right: 12px;
     background: var(--gold-bg);
     border: 1px solid var(--gold-line);
+    flex-shrink: 0;
 }
 
 /* ── Footer ── */
@@ -686,18 +811,17 @@ div[data-baseweb="select"] > div {
     text-align: center;
     color: var(--hint);
     padding: 18px 0 4px;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     border-top: 1px solid var(--line);
-    margin-top: 24px;
+    margin-top: 28px;
 }
 
-/* ── Linha separadora dourada ── */
+/* ── Divisor dourado ── */
 .gold-divider {
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
     border: none;
-    margin: 16px 0;
-    border-radius: 999px;
+    margin: 18px 0;
 }
 
 /* ── Tag de perfil (sidebar) ── */
@@ -706,32 +830,51 @@ div[data-baseweb="select"] > div {
     background: var(--gold-bg);
     border: 1px solid var(--gold-line);
     border-radius: 999px;
-    padding: 3px 12px;
-    font-size: 0.78rem;
+    padding: 2px 12px;
+    font-size: 0.7rem;
     color: var(--gold);
-    font-weight: 700;
+    font-weight: 500;
     margin-top: 4px;
+    letter-spacing: 0.04em;
 }
 
-/* ── Linha de info (animais, farmácia) ── */
+/* ── Linha de info ── */
 .info-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--line);
-    font-size: 0.9rem;
+    padding: 9px 0;
+    border-bottom: 1px solid rgba(212,175,80,0.08);
+    font-size: 0.88rem;
 }
 .info-row:last-child { border-bottom: none; }
-.info-label { color: var(--muted); }
-.info-value { color: var(--text); font-weight: 600; }
+.info-label { color: var(--muted); font-weight: 300; }
+.info-value { color: var(--text); font-weight: 500; }
 
-/* ── Green brand accent (verde do logo) ── */
+/* ── Accents ── */
 .accent-green { color: var(--green-brand) !important; }
 .accent-gold  { color: var(--gold) !important; }
 
+/* ── Streamlit alerts (st.info, st.success, st.warning, st.error) ── */
+div[data-testid="stAlert"] {
+    border-radius: 10px !important;
+    border-width: 1px !important;
+}
+
+/* ── Expander ── */
+details summary {
+    color: var(--cream) !important;
+    font-weight: 500 !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--gold-d); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
+
 /* ============================================================
-   RESPONSIVO MOBILE — telas até 768px
+   RESPONSIVO MOBILE
    ============================================================ */
 @media (max-width: 768px) {
     [data-testid="stSidebar"] {
@@ -744,9 +887,8 @@ div[data-baseweb="select"] > div {
         position: fixed !important;
         z-index: 9999 !important;
         height: 100vh !important;
-        top: 0 !important;
-        left: 0 !important;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.5) !important;
+        top: 0 !important; left: 0 !important;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.6) !important;
     }
     .main .block-container {
         padding: 0.5rem 0.6rem 5rem !important;
@@ -757,26 +899,23 @@ div[data-baseweb="select"] > div {
         flex: 1 1 100% !important;
         min-width: 100% !important;
     }
-    .card { padding: 12px !important; min-height: 80px !important; }
-    .topbar { flex-direction: column !important; gap: 6px !important; padding: 10px !important; }
+    .card { padding: 14px !important; min-height: 80px !important; }
+    .topbar { flex-direction: column !important; gap: 8px !important; }
     .topbar-menu { display: none !important; }
-    .app-grid-card { padding: 14px 10px !important; min-height: 110px !important; border-radius: 14px !important; }
-    .app-grid-icon { font-size: 1.7rem !important; }
-    .app-grid-title { font-size: 0.88rem !important; }
+    .app-grid-card { padding: 14px 10px !important; min-height: 110px !important; border-radius: 12px !important; }
+    .app-grid-icon { font-size: 1.6rem !important; }
+    .app-grid-title { font-size: 0.85rem !important; }
     .section-title { font-size: 1.1rem !important; }
-    .stButton button, .stDownloadButton button {
-        min-height: 48px !important;
-        font-size: 1rem !important;
-    }
+    .stButton button, .stDownloadButton button { min-height: 48px !important; font-size: 0.95rem !important; }
     div[data-testid="stTextInput"],
     div[data-testid="stTextArea"],
     div[data-testid="stSelectbox"],
     div[data-testid="stNumberInput"],
     div[data-testid="stDateInput"] { width: 100% !important; }
     [data-testid="stDataFrame"] { overflow-x: auto !important; max-width: 100vw !important; }
-    div[data-testid="stMetric"] { padding: 12px !important; border-radius: 12px !important; }
+    div[data-testid="stMetric"] { padding: 14px !important; border-radius: 12px !important; }
     div[role="radiogroup"] { flex-direction: column !important; }
-    div[role="radiogroup"] label { width: 100% !important; min-height: 48px !important; }
+    div[role="radiogroup"] label { width: 100% !important; min-height: 46px !important; }
     .stTextInput input { font-size: 16px !important; }
     .card-value { font-size: 1.5rem !important; }
 }
@@ -1462,27 +1601,33 @@ with st.sidebar:
     if os.path.exists(LOGO):
         st.image(LOGO, use_container_width=True)
     else:
-        st.markdown("### Rancho Recanto Verde")
-
-    # Divider dourado
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(201,168,76,0.25);margin:6px 0 10px">', unsafe_allow_html=True)
-
-    # Info do usuário logado
-    if "usuario" in st.session_state and st.session_state.usuario:
-        _nome_u = st.session_state.usuario.get("nome", "").upper()
-        _perfil_u = st.session_state.usuario.get("perfil", "")
-        st.markdown(f"""
-<div style='padding:2px 0 12px'>
-  <div style='font-size:0.68rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.08em'>Logado como</div>
-  <div style='font-size:0.92rem;font-weight:700;color:#f0f4f8;margin-top:2px'>{_nome_u}</div>
-  <div style='display:inline-block;background:rgba(201,168,76,0.12);border:1px solid rgba(201,168,76,0.25);border-radius:999px;padding:2px 10px;font-size:0.68rem;color:#c9a84c;font-weight:700;margin-top:4px'>{_perfil_u}</div>
+        st.markdown("""
+<div style='padding:4px 0 16px;border-bottom:1px solid rgba(212,175,80,0.15);margin-bottom:12px'>
+  <div style='font-family:"Playfair Display",serif;font-size:1rem;color:#d4af50;font-weight:500;line-height:1.25'>Rancho Recanto Verde</div>
+  <div style='font-size:0.68rem;color:#4a9e6b;letter-spacing:0.12em;text-transform:uppercase;margin-top:3px;font-weight:400'>Sistema de Gestão</div>
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown('<div style="font-size:0.7rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Menu</div>', unsafe_allow_html=True)
+    # Info do usuário logado
+    if "usuario" in st.session_state and st.session_state.usuario:
+        _nome_u = st.session_state.usuario.get("nome", "")
+        _perfil_u = st.session_state.usuario.get("perfil", "")
+        _iniciais = "".join([p[0].upper() for p in _nome_u.split()[:2]]) if _nome_u else "?"
+        st.markdown(f"""
+<div style='display:flex;align-items:center;gap:10px;padding:8px 0 14px;border-bottom:1px solid rgba(212,175,80,0.1);margin-bottom:10px'>
+  <div style='width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#d4af50,#8a6d20);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;color:#0a1628;flex-shrink:0'>{_iniciais}</div>
+  <div>
+    <div style='font-size:0.85rem;font-weight:500;color:#e8e2d5'>{_nome_u}</div>
+    <div style='display:inline-block;background:rgba(212,175,80,0.1);border:1px solid rgba(212,175,80,0.2);border-radius:999px;padding:1px 9px;font-size:0.65rem;color:#d4af50;font-weight:500;margin-top:2px;letter-spacing:0.04em'>{_perfil_u}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown('<div style="font-size:0.65rem;color:rgba(212,175,80,0.4);text-transform:uppercase;letter-spacing:0.14em;padding:0 0 4px;font-weight:400">Navegação</div>', unsafe_allow_html=True)
 
 menu_map_total = {
     "🏠 Dashboard": "Dashboard",
+    "📅 Agenda": "Agenda",
     "🐎 Cadastrar Animal": "Cadastrar Animal",
     "📋 Animais por Tipo": "Animais por Tipo",
     "⚖️ Pesagem / Evolução": "Pesagem / Evolução",
@@ -1549,6 +1694,434 @@ st.markdown("---")
 
 
 # =========================================================
+# AGENDA / CALENDÁRIO
+# =========================================================
+
+TIPOS_EVENTO = [
+    "💉 Vacina / Vermifugação",
+    "🩺 Consulta Veterinária",
+    "🔁 Retorno Veterinário",
+    "💊 Medicação",
+    "⚖️ Pesagem",
+    "🧬 Reprodução / Lavagem",
+    "🐣 Parto Previsto",
+    "🔨 Manutenção",
+    "💰 Pagamento / Recebimento",
+    "👥 Reunião / Visita",
+    "📋 Outro",
+]
+
+CORES_EVENTO = {
+    "💉 Vacina / Vermifugação":    "#4a9e6b",
+    "🩺 Consulta Veterinária":     "#4a8fcf",
+    "🔁 Retorno Veterinário":      "#7a6fcf",
+    "💊 Medicação":                "#e8b84b",
+    "⚖️ Pesagem":                  "#d4af50",
+    "🧬 Reprodução / Lavagem":     "#cf4a8f",
+    "🐣 Parto Previsto":           "#3db86a",
+    "🔨 Manutenção":               "#8a9bb0",
+    "💰 Pagamento / Recebimento":  "#4a9e6b",
+    "👥 Reunião / Visita":         "#d4af50",
+    "📋 Outro":                    "#6a7a8a",
+}
+
+
+def _cor_evento(tipo):
+    return CORES_EVENTO.get(tipo, "#6a7a8a")
+
+
+@st.cache_data(ttl=30)
+def _carregar_agenda(ano, mes):
+    """Carrega eventos do mês especificado."""
+    try:
+        df = pd.read_sql_query(
+            "SELECT * FROM agenda WHERE data IS NOT NULL ORDER BY data, hora_inicio",
+            get_engine()
+        )
+        if df.empty:
+            return df
+        df["data_dt"] = pd.to_datetime(df["data"], format="%d/%m/%Y", errors="coerce")
+        df = df[df["data_dt"].notna()]
+        df = df[(df["data_dt"].dt.year == ano) & (df["data_dt"].dt.month == mes)]
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _calendario_html(ano, mes, eventos_df):
+    """Gera o HTML do calendário mensal."""
+    import calendar
+    cal = calendar.monthcalendar(ano, mes)
+    meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+
+    # Mapeia eventos por dia
+    ev_por_dia = {}
+    if not eventos_df.empty:
+        for _, row in eventos_df.iterrows():
+            dia = row["data_dt"].day
+            if dia not in ev_por_dia:
+                ev_por_dia[dia] = []
+            ev_por_dia[dia].append(row)
+
+    hoje = date.today()
+    css = """
+<style>
+.cal-wrap { font-family:'DM Sans',sans-serif; }
+.cal-header { display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:16px; }
+.cal-month { font-family:'Playfair Display',serif; font-size:1.3rem;
+  font-weight:500; color:#e8e2d5; }
+.cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+.cal-dow { text-align:center; font-size:0.68rem; color:rgba(212,175,80,0.5);
+  text-transform:uppercase; letter-spacing:0.1em; padding:6px 0; font-weight:400; }
+.cal-day { background:#0d1f3c; border:1px solid rgba(212,175,80,0.1);
+  border-radius:10px; min-height:80px; padding:6px; position:relative;
+  transition:border-color .15s; }
+.cal-day:hover { border-color:rgba(212,175,80,0.3); }
+.cal-day.empty { background:transparent; border-color:transparent; }
+.cal-day.hoje { border-color:#d4af50; background:#0f2444; }
+.cal-day.hoje .cal-num { color:#d4af50; }
+.cal-num { font-size:0.78rem; font-weight:500; color:#7a8fa3; margin-bottom:4px; }
+.cal-ev { font-size:0.65rem; color:#0a1628; border-radius:4px; padding:2px 5px;
+  margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-weight:500; line-height:1.4; }
+.cal-more { font-size:0.6rem; color:#5a7a6a; }
+</style>
+"""
+    html = css + '<div class="cal-wrap">'
+    html += f'<div class="cal-header"><div class="cal-month">{meses_pt[mes]} {ano}</div></div>'
+    html += '<div class="cal-grid">'
+
+    for d in dias_semana:
+        html += f'<div class="cal-dow">{d}</div>'
+
+    for semana in cal:
+        for dia in semana:
+            if dia == 0:
+                html += '<div class="cal-day empty"></div>'
+            else:
+                classes = "cal-day"
+                if hoje.year == ano and hoje.month == mes and hoje.day == dia:
+                    classes += " hoje"
+                html += f'<div class="{classes}">'
+                html += f'<div class="cal-num">{dia}</div>'
+                evs = ev_por_dia.get(dia, [])
+                for ev in evs[:3]:
+                    cor = _cor_evento(ev.get("tipo", ""))
+                    titulo = str(ev.get("titulo", ""))[:22]
+                    html += f'<div class="cal-ev" style="background:{cor}">{titulo}</div>'
+                if len(evs) > 3:
+                    html += f'<div class="cal-more">+{len(evs)-3} mais</div>'
+                html += '</div>'
+
+    html += '</div></div>'
+    return html
+
+
+if op == "Agenda":
+    titulo_pagina("📅 Agenda", "Calendário de eventos, procedimentos e compromissos do haras")
+
+    aba = st.radio(
+        "Opção",
+        ["📆 Calendário", "➕ Novo Evento", "📋 Lista de Eventos"],
+        horizontal=True
+    )
+
+    animais_ag = listar_animais()
+    funcionarios_ag = pd.read_sql_query(
+        "SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != '' AND status = 'Ativo'",
+        conn
+    )
+
+    # ── CALENDÁRIO ─────────────────────────────────────────
+    if aba == "📆 Calendário":
+        col_nav1, col_nav2, col_nav3 = st.columns([1, 2, 1])
+
+        if "agenda_ano" not in st.session_state:
+            st.session_state.agenda_ano = date.today().year
+        if "agenda_mes" not in st.session_state:
+            st.session_state.agenda_mes = date.today().month
+
+        with col_nav1:
+            if st.button("← Mês anterior", use_container_width=True):
+                if st.session_state.agenda_mes == 1:
+                    st.session_state.agenda_mes = 12
+                    st.session_state.agenda_ano -= 1
+                else:
+                    st.session_state.agenda_mes -= 1
+                st.rerun()
+
+        with col_nav3:
+            if st.button("Próximo mês →", use_container_width=True):
+                if st.session_state.agenda_mes == 12:
+                    st.session_state.agenda_mes = 1
+                    st.session_state.agenda_ano += 1
+                else:
+                    st.session_state.agenda_mes += 1
+                st.rerun()
+
+        with col_nav2:
+            if st.button("📅 Hoje", use_container_width=True):
+                st.session_state.agenda_ano = date.today().year
+                st.session_state.agenda_mes = date.today().month
+                st.rerun()
+
+        ano_sel = st.session_state.agenda_ano
+        mes_sel = st.session_state.agenda_mes
+
+        df_mes = _carregar_agenda(ano_sel, mes_sel)
+
+        # Calendário visual
+        st.markdown(
+            _calendario_html(ano_sel, mes_sel, df_mes),
+            unsafe_allow_html=True
+        )
+
+        # Legenda de cores
+        st.markdown("---")
+        st.markdown("**Legenda de tipos:**")
+        cols_leg = st.columns(4)
+        for i, (tipo, cor) in enumerate(CORES_EVENTO.items()):
+            with cols_leg[i % 4]:
+                st.markdown(
+                    f'<span style="display:inline-block;width:10px;height:10px;'
+                    f'background:{cor};border-radius:3px;margin-right:5px"></span>'
+                    f'<span style="font-size:0.78rem;color:#7a8fa3">{tipo}</span>',
+                    unsafe_allow_html=True
+                )
+
+        # Eventos do dia selecionado
+        st.markdown("---")
+        st.markdown("### Eventos do mês")
+
+        if df_mes.empty:
+            st.info("Nenhum evento cadastrado para este mês.")
+        else:
+            for _, ev in df_mes.sort_values("data_dt").iterrows():
+                cor = _cor_evento(ev.get("tipo", ""))
+                status_ev = ev.get("status", "Agendado")
+                status_cor = "#4a9e6b" if status_ev == "Concluído" else ("#e05252" if status_ev == "Cancelado" else "#e8b84b")
+
+                st.markdown(f"""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px;display:flex;
+align-items:center;justify-content:space-between;gap:12px">
+  <div style="flex:1">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:0.9rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+      <span style="font-size:0.68rem;background:{status_cor}22;color:{status_cor};
+        border:1px solid {status_cor}44;border-radius:99px;padding:1px 8px">{status_ev}</span>
+    </div>
+    <div style="font-size:0.78rem;color:#5a7a6a">
+      📅 {ev.get('data','')} &nbsp;·&nbsp;
+      🕐 {ev.get('hora_inicio','')}{'–'+ev.get('hora_fim','') if ev.get('hora_fim') else ''} &nbsp;·&nbsp;
+      {ev.get('tipo','')}
+    </div>
+    <div style="font-size:0.78rem;color:#7a8fa3;margin-top:2px">
+      {'🐎 '+ev.get('animal','') if ev.get('animal') else ''}
+      {'&nbsp;·&nbsp; 👤 '+ev.get('funcionario','') if ev.get('funcionario') else ''}
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # ── NOVO EVENTO ────────────────────────────────────────
+    elif aba == "➕ Novo Evento":
+        titulo_pagina("➕ Novo Evento", "Cadastre um compromisso, procedimento ou tarefa")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            titulo_ev = st.text_input("Título do evento *")
+            tipo_ev = st.selectbox("Tipo", TIPOS_EVENTO)
+            data_ev = st.date_input("Data *", format="DD/MM/YYYY")
+            col_h1, col_h2 = st.columns(2)
+            with col_h1:
+                hora_inicio = st.time_input("Hora início")
+            with col_h2:
+                hora_fim = st.time_input("Hora fim", value=None)
+
+        with col2:
+            animal_ev = ""
+            if not animais_ag.empty:
+                opcoes_animal = ["(nenhum)"] + animais_ag["nome"].dropna().tolist()
+                sel_animal = st.selectbox("Animal (opcional)", opcoes_animal)
+                animal_ev = sel_animal if sel_animal != "(nenhum)" else ""
+            else:
+                st.info("Nenhum animal cadastrado.")
+
+            funcionario_ev = ""
+            if not funcionarios_ag.empty:
+                opcoes_func = ["(nenhum)"] + funcionarios_ag["nome"].dropna().tolist()
+                sel_func = st.selectbox("Responsável (opcional)", opcoes_func)
+                funcionario_ev = sel_func if sel_func != "(nenhum)" else ""
+            else:
+                st.info("Nenhum funcionário ativo.")
+
+            status_ev = st.selectbox("Status", ["Agendado", "Concluído", "Cancelado"])
+            descricao_ev = st.text_area("Descrição / observações")
+
+        if st.button("💾 Salvar Evento", use_container_width=True):
+            if not titulo_ev:
+                st.error("Informe o título do evento.")
+            else:
+                hora_fim_str = hora_fim.strftime("%H:%M") if hora_fim else ""
+                c.execute("""
+                    INSERT INTO agenda
+                    (titulo, tipo, data, hora_inicio, hora_fim,
+                     animal, funcionario, descricao, status, cor, obs)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    titulo_ev,
+                    tipo_ev,
+                    br_data(data_ev),
+                    hora_inicio.strftime("%H:%M"),
+                    hora_fim_str,
+                    animal_ev,
+                    funcionario_ev,
+                    descricao_ev,
+                    status_ev,
+                    _cor_evento(tipo_ev),
+                    ""
+                ))
+                conn.commit()
+                _carregar_agenda.clear()
+                st.success(f"✅ Evento '{titulo_ev}' salvo para {br_data(data_ev)}!")
+                st.session_state.agenda_ano = data_ev.year
+                st.session_state.agenda_mes = data_ev.month
+
+    # ── LISTA DE EVENTOS ───────────────────────────────────
+    elif aba == "📋 Lista de Eventos":
+        titulo_pagina("📋 Lista de Eventos", "Todos os eventos cadastrados")
+
+        try:
+            df_todos = pd.read_sql_query(
+                "SELECT * FROM agenda WHERE data IS NOT NULL ORDER BY data DESC, hora_inicio",
+                get_engine()
+            )
+        except Exception:
+            df_todos = pd.DataFrame()
+
+        if df_todos.empty:
+            st.info("Nenhum evento cadastrado ainda.")
+        else:
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                filtro_tipo = st.selectbox("Filtrar tipo", ["Todos"] + TIPOS_EVENTO)
+            with col_f2:
+                filtro_status = st.selectbox("Filtrar status", ["Todos", "Agendado", "Concluído", "Cancelado"])
+            with col_f3:
+                filtro_animal = st.text_input("Buscar animal")
+
+            df_v = df_todos.copy()
+            if filtro_tipo != "Todos":
+                df_v = df_v[df_v["tipo"] == filtro_tipo]
+            if filtro_status != "Todos":
+                df_v = df_v[df_v["status"] == filtro_status]
+            if filtro_animal:
+                df_v = df_v[df_v["animal"].fillna("").str.contains(filtro_animal, case=False)]
+
+            st.metric("Eventos encontrados", len(df_v))
+
+            # Exibe lista com ações
+            for _, ev in df_v.iterrows():
+                cor = _cor_evento(ev.get("tipo", ""))
+                status_ev = ev.get("status", "Agendado")
+                status_cor = "#4a9e6b" if status_ev == "Concluído" else ("#e05252" if status_ev == "Cancelado" else "#e8b84b")
+                ev_id = str(ev["id"])
+
+                colA, colB, colC = st.columns([5, 1, 1])
+                with colA:
+                    st.markdown(f"""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
+  <div style="display:flex;align-items:center;gap:8px">
+    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+    <span style="font-size:0.65rem;background:{status_cor}22;color:{status_cor};
+      border:1px solid {status_cor}44;border-radius:99px;padding:1px 7px">{status_ev}</span>
+  </div>
+  <div style="font-size:0.75rem;color:#5a7a6a;margin-top:3px">
+    📅 {ev.get('data','')} · 🕐 {ev.get('hora_inicio','')} · {ev.get('tipo','')}
+    {'· 🐎 '+ev.get('animal','') if ev.get('animal') else ''}
+    {'· 👤 '+ev.get('funcionario','') if ev.get('funcionario') else ''}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                with colB:
+                    if status_ev != "Concluído":
+                        if st.button("✅", key=f"conc_{ev_id}", help="Marcar como concluído"):
+                            c.execute("UPDATE agenda SET status = %s WHERE id = %s", ("Concluído", ev_id))
+                            conn.commit()
+                            _carregar_agenda.clear()
+                            st.rerun()
+
+                with colC:
+                    if st.button("🗑️", key=f"del_{ev_id}", help="Excluir evento"):
+                        c.execute("DELETE FROM agenda WHERE id = %s", (ev_id,))
+                        conn.commit()
+                        _carregar_agenda.clear()
+                        st.rerun()
+
+            st.markdown("---")
+            st.download_button(
+                "📥 Baixar Eventos (Excel)",
+                data=gerar_excel(df_v),
+                file_name="agenda_rancho_recanto_verde.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+    # ── Importa automaticamente da medicacoes_agendadas ──────
+    with st.expander("🔄 Sincronizar com Medicações Agendadas", expanded=False):
+        st.caption("Importa automaticamente as medicações agendadas do módulo Veterinário para a Agenda.")
+        if st.button("🔄 Sincronizar agora", use_container_width=True):
+            try:
+                meds = pd.read_sql_query(
+                    "SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada' AND data_hora IS NOT NULL",
+                    get_engine()
+                )
+                importados = 0
+                for _, m in meds.iterrows():
+                    try:
+                        dh = datetime.strptime(str(m["data_hora"]), "%d/%m/%Y %H:%M")
+                        titulo_m = f"💊 {m['medicamento']} — {m['animal']}"
+                        existente = pd.read_sql_query(
+                            "SELECT id FROM agenda WHERE titulo = %s AND data = %s",
+                            get_engine(),
+                            params=(titulo_m, dh.strftime("%d/%m/%Y"))
+                        )
+                        if existente.empty:
+                            c.execute("""
+                                INSERT INTO agenda
+                                (titulo, tipo, data, hora_inicio, hora_fim,
+                                 animal, funcionario, descricao, status, cor, obs)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                titulo_m,
+                                "💊 Medicação",
+                                dh.strftime("%d/%m/%Y"),
+                                dh.strftime("%H:%M"),
+                                "",
+                                str(m.get("animal", "")),
+                                str(m.get("funcionario", "")),
+                                str(m.get("dosagem", "")),
+                                "Agendado",
+                                _cor_evento("💊 Medicação"),
+                                ""
+                            ))
+                            importados += 1
+                    except Exception:
+                        continue
+                conn.commit()
+                _carregar_agenda.clear()
+                st.success(f"✅ {importados} medicação(ões) importada(s) para a Agenda!")
+            except Exception as e:
+                st.error(f"Erro ao sincronizar: {e}")
+
+
+# =========================================================
 # DASHBOARD - HOME ESTILO APP PROFISSIONAL
 # =========================================================
 
@@ -1600,17 +2173,17 @@ if op == "Dashboard":
         partos_proximos = len(receptoras[receptoras["status_parto"].isin(["VENCIDO", "PRÓXIMO"])])
 
     st.markdown("""
-<div style='display:flex;align-items:center;gap:12px;margin-bottom:18px'>
-  <div style='width:5px;height:44px;border-radius:99px;background:linear-gradient(180deg,#c9a84c,#4a9e6b);flex-shrink:0'></div>
+<div style='display:flex;align-items:center;gap:14px;margin-bottom:20px'>
+  <div style='width:4px;height:48px;border-radius:99px;background:linear-gradient(180deg,#d4af50,#4a9e6b);flex-shrink:0'></div>
   <div>
-    <div class='quick-title' style='margin:0'>Rancho Recanto Verde</div>
-    <div class='quick-subtitle' style='margin:0'>Organização completa do haras na palma da mão</div>
+    <div style='font-family:"Playfair Display",serif;font-size:1.6rem;font-weight:500;color:#e8e2d5;margin:0;line-height:1.1'>Rancho Recanto Verde</div>
+    <div style='font-size:0.82rem;color:#5a7a6a;font-weight:300;margin-top:2px;letter-spacing:0.01em'>Gestão completa do haras na palma da mão</div>
   </div>
 </div>
-<div style='height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.4),rgba(74,158,107,0.3),transparent);margin-bottom:18px'></div>
+<div style='height:1px;background:linear-gradient(90deg,transparent,rgba(212,175,80,0.3),rgba(74,158,107,0.2),transparent);margin-bottom:20px'></div>
 """, unsafe_allow_html=True)
     st.markdown("""
-<div style='font-size:0.72rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;margin-bottom:10px'>
+<div style='font-size:0.68rem;color:rgba(212,175,80,0.5);text-transform:uppercase;letter-spacing:0.14em;font-weight:400;margin-bottom:10px'>
   ⚡ Acesso rápido
 </div>
 """, unsafe_allow_html=True)
@@ -1658,9 +2231,9 @@ if op == "Dashboard":
                 st.rerun()
 
     st.markdown("""
-<div style='margin:20px 0 14px'>
-  <div style='height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.35),transparent);margin-bottom:16px'></div>
-  <div style='font-size:0.72rem;color:#4a6278;text-transform:uppercase;letter-spacing:0.1em;font-weight:700'>
+<div style='margin:22px 0 16px'>
+  <div style='height:1px;background:linear-gradient(90deg,transparent,rgba(212,175,80,0.2),transparent);margin-bottom:18px'></div>
+  <div style='font-size:0.68rem;color:rgba(212,175,80,0.5);text-transform:uppercase;letter-spacing:0.14em;font-weight:400'>
     📊 Resumo do haras
   </div>
 </div>
@@ -1725,6 +2298,43 @@ if op == "Dashboard":
             st.info("Nenhum recebimento cadastrado.")
 
     st.markdown("---")
+    # ── Próximos eventos da Agenda ──────────────────────────
+    try:
+        df_prox = pd.read_sql_query(
+            "SELECT * FROM agenda WHERE status = 'Agendado' AND data IS NOT NULL ORDER BY data, hora_inicio LIMIT 5",
+            get_engine()
+        )
+        if not df_prox.empty:
+            df_prox["data_dt"] = pd.to_datetime(df_prox["data"], format="%d/%m/%Y", errors="coerce")
+            df_prox = df_prox[df_prox["data_dt"] >= pd.Timestamp(date.today())]
+
+        if not df_prox.empty:
+            st.markdown("---")
+            st.markdown("### 📅 Próximos eventos")
+            for _, ev in df_prox.head(5).iterrows():
+                cor = _cor_evento(ev.get("tipo", ""))
+                dias_faltam = (ev["data_dt"].date() - date.today()).days
+                label_dias = "Hoje" if dias_faltam == 0 else f"Em {dias_faltam}d"
+                st.markdown(f"""
+<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+    <div style="font-size:0.75rem;color:#5a7a6a;margin-top:2px">
+      {ev.get('data','')} · {ev.get('hora_inicio','')} · {ev.get('tipo','')}
+      {'· '+ev.get('animal','') if ev.get('animal') else ''}
+    </div>
+  </div>
+  <span style="font-size:0.72rem;background:rgba(212,175,80,0.1);color:#d4af50;
+    border:1px solid rgba(212,175,80,0.2);border-radius:99px;padding:3px 10px;white-space:nowrap">{label_dias}</span>
+</div>
+""", unsafe_allow_html=True)
+            if st.button("Ver agenda completa →", key="dash_agenda"):
+                st.session_state.pagina_atual = "Agenda"
+                st.rerun()
+    except Exception:
+        pass
+
     st.caption("Tela inicial simplificada para uso no celular. Gráficos completos ficam em Relatórios / Gráficos.")
 
 
