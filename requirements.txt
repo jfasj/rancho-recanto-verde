@@ -5,4 +5,7 @@ reportlab>=4.0.0
 twilio>=8.0.0
 streamlit-autorefresh>=0.0.1
 requests>=2.31.0
+
 psycopg2-binary>=2.9.0
+
+SQLAlchemy>=2.0.0
