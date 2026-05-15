@@ -154,140 +154,138 @@ c = conn.cursor()
 # BANCO DE DADOS
 # =========================================================
 
-TABELAS = [
-    "animais", "farmacia", "sanitario", "tratamentos", "pesagens",
-    "doadoras", "receptoras", "vendas", "recebimentos", "funcionarios",
-    "alertas_whatsapp", "medicacoes_agendadas", "compras_nfe",
-    "abqm_consultas", "usuarios",
-]
+# =========================================================
+# MIGRAÇÃO DE BANCO — rápida: 1 query por tabela
+# (substitui os ~150 add_col individuais do startup)
+# =========================================================
 
-for tabela in TABELAS:
-    c.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tabela} (
-            id SERIAL PRIMARY KEY
-        )
-    """)
+# Definição completa de cada tabela: {tabela: [colunas]}
+_SCHEMA = {
+    "animais": [
+        "nome", "tipo", "especie", "raca", "sexo", "nascimento", "cor",
+        "responsavel", "cpf", "telefone", "local", "microchip", "status",
+        "registro_abqm", "nome_oficial_abqm", "pai_abqm", "mae_abqm",
+        "criador_abqm", "proprietario_abqm", "link_abqm", "obs_abqm", "obs",
+    ],
+    "farmacia": [
+        "medicamento", "categoria", "quantidade", "estoque_min", "unidade",
+        "preco", "validade", "fornecedor", "obs",
+        "quantidade_compra", "unidade_compra", "volume_por_unidade",
+        "unidade_controle", "estoque_convertido", "estoque_min_controle",
+        "preco_por_controle",
+    ],
+    "sanitario": [
+        "animal", "tipo", "procedimento", "produto", "data_aplicacao",
+        "proxima_dose", "quantidade_usada", "unidade", "preco_unitario",
+        "custo_total", "responsavel", "obs",
+    ],
+    "tratamentos": [
+        "animal", "tipo", "data", "motivo", "diagnostico", "tratamento",
+        "medicamento", "quantidade_usada", "unidade", "dosagem",
+        "preco_unitario", "custo_total", "veterinario", "retorno",
+        "funcionario_responsavel", "telefone_funcionario",
+        "data_hora_medicacao", "gerar_alerta_whatsapp", "obs",
+    ],
+    "pesagens": ["animal", "tipo", "data_pesagem", "peso", "obs"],
+    "doadoras": [
+        "egua_doadora", "garanhao", "data_inseminacao", "protocolo",
+        "dosagens", "data_prevista_lavagem", "data_lavagem",
+        "resultado_lavagem", "embrioes_coletados", "status", "obs",
+    ],
+    "receptoras": [
+        "receptora", "egua_doadora", "garanhao", "cruzamento",
+        "data_transferencia", "dosagens", "protocolo", "previsao_parto",
+        "confirmacao_prenhez", "status", "obs",
+    ],
+    "vendas": [
+        "animal", "tipo", "data_venda", "valor_negociado", "desconto",
+        "valor_final", "forma_pagamento", "parcelas", "status_venda",
+        "comprador_nome", "comprador_cpf_cnpj", "comprador_telefone",
+        "comprador_email", "comprador_endereco", "obs",
+    ],
+    "recebimentos": [
+        "venda_id", "animal", "comprador", "parcela", "vencimento",
+        "valor", "data_pagamento", "status", "obs",
+    ],
+    "funcionarios": [
+        "nome", "cpf", "rg", "telefone", "email", "endereco", "cargo",
+        "setor", "salario", "data_admissao", "status", "documentos", "obs",
+    ],
+    "usuarios": ["nome", "senha_hash", "perfil", "permissoes", "ativo"],
+    "alertas_whatsapp": [
+        "funcionario", "telefone", "tipo_alerta", "mensagem", "data_envio",
+        "status", "sid_twilio", "erro_twilio", "obs",
+    ],
+    "medicacoes_agendadas": [
+        "animal", "tipo_animal", "medicamento", "dosagem", "data_hora",
+        "funcionario", "telefone", "mensagem", "status", "alerta_gerado",
+        "data_alerta", "sid_twilio", "erro_twilio", "obs",
+    ],
+    "compras_nfe": [
+        "chave_nfe", "numero_nfe", "data_emissao", "fornecedor",
+        "cnpj_fornecedor", "produto", "ncm", "quantidade", "unidade",
+        "valor_unitario", "valor_total", "data_importacao",
+    ],
+    "abqm_consultas": [
+        "animal", "registro_abqm", "nome_oficial", "pai", "mae",
+        "pelagem", "nascimento", "criador", "proprietario",
+        "link_consulta", "observacoes", "data_cadastro",
+    ],
+    "fichas_medicas": [
+        "animal", "tipo_animal", "data_atendimento", "motivo",
+        "diagnostico", "tratamento_indicado", "veterinario",
+        "retorno", "status", "custo_total", "obs",
+    ],
+    "ficha_medicacoes": [
+        "ficha_id", "animal", "tipo_animal", "medicamento", "quantidade",
+        "unidade", "dosagem", "data_hora", "funcionario", "telefone",
+        "mensagem", "status", "alerta_gerado", "data_alerta",
+        "preco_unitario", "custo_total", "obs",
+    ],
+}
 
-conn.commit()
+
+@st.cache_resource
+def _migrar_banco(_conn):
+    """
+    Executa a migração do banco UMA única vez por sessão do servidor.
+    Usa 1 query por tabela (information_schema) ao invés de 1 por coluna.
+    Reduz de ~150 round-trips para ~17.
+    """
+    cur = _conn.cursor()
+
+    # Busca todas as colunas existentes de uma vez só
+    tabelas_list = list(_SCHEMA.keys())
+    cur.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_name = ANY(%s)
+    """, (tabelas_list,))
+    existentes = set((r["table_name"], r["column_name"]) for r in cur.fetchall())
+
+    for tabela, colunas in _SCHEMA.items():
+        # Cria a tabela se não existir
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {tabela} (
+                id SERIAL PRIMARY KEY
+            )
+        """)
+        # Adiciona só as colunas que faltam
+        for coluna in colunas:
+            if (tabela, coluna) not in existentes:
+                cur.execute(f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} TEXT")
+
+    _conn.commit()
+    cur.close()
+    return True
 
 
+# Compatibilidade: add_col ainda usada em poucos pontos do código
 def add_col(tabela, coluna, tipo="TEXT"):
-    c.execute("""
-        SELECT column_name FROM information_schema.columns
-        WHERE table_name = %s AND column_name = %s
-    """, (tabela, coluna))
-    if not c.fetchone():
-        c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
-        
-for col in [
-    "quantidade_compra", "unidade_compra", "volume_por_unidade",
-    "unidade_controle", "estoque_convertido", "estoque_min_controle",
-    "preco_por_controle"
-]:
-    add_col("farmacia", col)
-
-conn.commit()
+    c.execute(f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
 
 
-for col in [
-    "nome", "tipo", "especie", "raca", "sexo", "nascimento", "cor",
-    "responsavel", "cpf", "telefone", "local", "microchip", "status",
-    "registro_abqm", "nome_oficial_abqm", "pai_abqm", "mae_abqm",
-    "criador_abqm", "proprietario_abqm", "link_abqm", "obs_abqm",
-    "obs"
-]:
-    add_col("animais", col)
-
-for col in [
-    "medicamento", "categoria", "quantidade", "estoque_min", "unidade",
-    "preco", "validade", "fornecedor", "obs"
-]:
-    add_col("farmacia", col)
-
-for col in [
-    "animal", "tipo", "procedimento", "produto", "data_aplicacao",
-    "proxima_dose", "quantidade_usada", "unidade", "preco_unitario",
-    "custo_total", "responsavel", "obs"
-]:
-    add_col("sanitario", col)
-
-for col in [
-    "animal", "tipo", "data", "motivo", "diagnostico", "tratamento",
-    "medicamento", "quantidade_usada", "unidade", "dosagem",
-    "preco_unitario", "custo_total", "veterinario", "retorno",
-    "funcionario_responsavel", "telefone_funcionario",
-    "data_hora_medicacao", "gerar_alerta_whatsapp", "obs"
-]:
-    add_col("tratamentos", col)
-
-for col in ["animal", "tipo", "data_pesagem", "peso", "obs"]:
-    add_col("pesagens", col)
-
-for col in [
-    "egua_doadora", "garanhao", "data_inseminacao", "protocolo",
-    "dosagens", "data_prevista_lavagem", "data_lavagem",
-    "resultado_lavagem", "embrioes_coletados", "status", "obs"
-]:
-    add_col("doadoras", col)
-
-for col in [
-    "receptora", "egua_doadora", "garanhao", "cruzamento",
-    "data_transferencia", "dosagens", "protocolo", "previsao_parto",
-    "confirmacao_prenhez", "status", "obs"
-]:
-    add_col("receptoras", col)
-
-for col in [
-    "animal", "tipo", "data_venda", "valor_negociado", "desconto",
-    "valor_final", "forma_pagamento", "parcelas", "status_venda",
-    "comprador_nome", "comprador_cpf_cnpj", "comprador_telefone",
-    "comprador_email", "comprador_endereco", "obs"
-]:
-    add_col("vendas", col)
-
-for col in [
-    "venda_id", "animal", "comprador", "parcela", "vencimento",
-    "valor", "data_pagamento", "status", "obs"
-]:
-    add_col("recebimentos", col)
-
-for col in ["nome", "senha_hash", "perfil", "permissoes", "ativo"]:
-    add_col("usuarios", col)
-
-for col in [
-    "nome", "cpf", "rg", "telefone", "email", "endereco", "cargo",
-    "setor", "salario", "data_admissao", "status", "documentos", "obs"
-]:
-    add_col("funcionarios", col)
-
-for col in [
-    "funcionario", "telefone", "tipo_alerta", "mensagem", "data_envio",
-    "status", "sid_twilio", "erro_twilio", "obs"
-]:
-    add_col("alertas_whatsapp", col)
-
-for col in [
-    "animal", "tipo_animal", "medicamento", "dosagem", "data_hora",
-    "funcionario", "telefone", "mensagem", "status", "alerta_gerado",
-    "data_alerta", "sid_twilio", "erro_twilio", "obs"
-]:
-    add_col("medicacoes_agendadas", col)
-
-for col in [
-    "chave_nfe", "numero_nfe", "data_emissao", "fornecedor",
-    "cnpj_fornecedor", "produto", "ncm", "quantidade", "unidade",
-    "valor_unitario", "valor_total", "data_importacao"
-]:
-    add_col("compras_nfe", col)
-
-for col in [
-    "animal", "registro_abqm", "nome_oficial", "pai", "mae",
-    "pelagem", "nascimento", "criador", "proprietario",
-    "link_consulta", "observacoes", "data_cadastro"
-]:
-    add_col("abqm_consultas", col)
-
-conn.commit()
+_migrar_banco(conn)
 
 
 # =========================================================
@@ -408,7 +406,12 @@ def carregar_usuario(nome):
 def usuario_tem_permissao(pagina):
     if "usuario" not in st.session_state:
         return False
-    permissoes = st.session_state.usuario.get("permissoes", "")
+    permissoes = str(st.session_state.usuario.get("permissoes", ""))
+    if permissoes in ("todas", "all", "Todas", "TODAS"):
+        return True
+    perfil = st.session_state.usuario.get("perfil", "")
+    if perfil == "Administrador":
+        return True
     return pagina in permissoes.split("|")
 
 
@@ -817,6 +820,7 @@ def moeda(valor):
         return "R$ 0,00"
 
 
+@st.cache_data(ttl=60)
 def listar_animais(somente_ativos=False):
     df = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if somente_ativos and not df.empty and "status" in df.columns:
@@ -824,8 +828,23 @@ def listar_animais(somente_ativos=False):
     return df
 
 
+@st.cache_data(ttl=60)
 def listar_farmacia():
     return pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", get_engine())
+
+
+@st.cache_data(ttl=60)
+def _carregar_dashboard():
+    """Carrega todos os dados do dashboard em paralelo — cacheado 60s."""
+    engine = get_engine()
+    animais     = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", engine)
+    farmacia    = pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", engine)
+    sanitario   = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", engine)
+    tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", engine)
+    vendas      = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", engine)
+    recebimentos= pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", engine)
+    receptoras  = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", engine)
+    return animais, farmacia, sanitario, tratamentos, vendas, recebimentos, receptoras
 
 
 def status_data(data_txt, dias_alerta=30):
@@ -1235,7 +1254,7 @@ def verificar_e_disparar_alertas_auto():
             enviados += 1
         else:
             c.execute(
-                "UPDATE medicacoes_agendadas SET erro_twilio = ? WHERE id = %s",
+                "UPDATE medicacoes_agendadas SET erro_twilio = %s WHERE id = %s",
                 (erro, str(row["id"]))
             )
         conn.commit()
@@ -1431,35 +1450,7 @@ def atualizar_farmacia_antiga_para_controle():
 # =========================================================
 # FICHA MÉDICA / PRESCRIÇÃO
 # =========================================================
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS fichas_medicas (
-    id SERIAL PRIMARY KEY
-)
-""")
-
-for col in [
-    "animal", "tipo_animal", "data_atendimento", "motivo",
-    "diagnostico", "tratamento_indicado", "veterinario",
-    "retorno", "status", "custo_total", "obs"
-]:
-    add_col("fichas_medicas", col)
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS ficha_medicacoes (
-    id SERIAL PRIMARY KEY
-)
-""")
-
-for col in [
-    "ficha_id", "animal", "tipo_animal", "medicamento", "quantidade",
-    "unidade", "dosagem", "data_hora", "funcionario", "telefone",
-    "mensagem", "status", "alerta_gerado", "data_alerta",
-    "preco_unitario", "custo_total", "obs"
-]:
-    add_col("ficha_medicacoes", col)
-
-conn.commit()
+# Tabelas fichas_medicas e ficha_medicacoes já criadas pelo _migrar_banco acima.
 
 
 
@@ -1562,13 +1553,7 @@ st.markdown("---")
 # =========================================================
 
 if op == "Dashboard":
-    animais = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
-    farmacia = pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", get_engine())
-    sanitario = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", get_engine())
-    tratamentos = pd.read_sql_query("SELECT * FROM tratamentos WHERE animal IS NOT NULL", get_engine())
-    vendas = pd.read_sql_query("SELECT * FROM vendas WHERE animal IS NOT NULL", get_engine())
-    recebimentos = pd.read_sql_query("SELECT * FROM recebimentos WHERE animal IS NOT NULL", get_engine())
-    receptoras = pd.read_sql_query("SELECT * FROM receptoras WHERE receptora IS NOT NULL", get_engine())
+    animais, farmacia, sanitario, tratamentos, vendas, recebimentos, receptoras = _carregar_dashboard()
 
     total_animais = len(animais)
     total_equinos = len(animais[animais["tipo"] == "Equino"]) if not animais.empty else 0
@@ -1803,6 +1788,8 @@ elif op == "Cadastrar Animal":
             obs
         ))
         conn.commit()
+        listar_animais.clear()
+        _carregar_dashboard.clear()
         st.success("Animal cadastrado com sucesso!")
 
 
@@ -1934,6 +1921,8 @@ elif op == "Animais por Tipo":
                         animal_id
                     ))
                     conn.commit()
+                    listar_animais.clear()
+                    _carregar_dashboard.clear()
                     st.success("Animal alterado com sucesso!")
                     st.rerun()
 
@@ -1943,6 +1932,8 @@ elif op == "Animais por Tipo":
                     if confirmar:
                         c.execute("DELETE FROM animais WHERE id = %s", (animal_id,))
                         conn.commit()
+                        listar_animais.clear()
+                        _carregar_dashboard.clear()
                         st.success("Animal excluído com sucesso!")
                         st.rerun()
                     else:
@@ -2518,6 +2509,8 @@ elif op == "Farmácia":
                 str(preco_por_controle)
             ))
             conn.commit()
+            listar_farmacia.clear()
+            _carregar_dashboard.clear()
             st.success("Medicamento cadastrado com estoque convertido!")
 
     elif aba == "Estoque":
@@ -2669,6 +2662,8 @@ elif op == "Farmácia":
                         str(preco_por_controle), str(med_id)
                     ))
                     conn.commit()
+                    listar_farmacia.clear()
+                    _carregar_dashboard.clear()
                     st.success("Medicamento alterado com sucesso!")
                     st.rerun()
 
@@ -2678,6 +2673,8 @@ elif op == "Farmácia":
                     if confirmar:
                         c.execute("DELETE FROM farmacia WHERE id = %s", (med_id,))
                         conn.commit()
+                        listar_farmacia.clear()
+                        _carregar_dashboard.clear()
                         st.success("Medicamento excluído com sucesso!")
                         st.rerun()
                     else:
@@ -4135,7 +4132,7 @@ elif op == "Admin / Usuários":
                     st.error("Informe a nova senha.")
 
                 c.execute(
-                    "UPDATE usuarios SET senha_hash = ? WHERE id = %s",
+                    "UPDATE usuarios SET senha_hash = %s WHERE id = %s",
                     (hash_senha(nova_senha), usuario_id)
                 )
                 conn.commit()
