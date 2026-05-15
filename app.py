@@ -2908,39 +2908,126 @@ elif op == "Consulta ABQM":
                 "registro_abqm","nome_oficial","pai","reg_pai","mae","reg_mae",
                 "avo_paterno","reg_avo_paterno","avo_materno","reg_avo_materno",
                 "bisavo_pp","bisavo_pm","bisavo_mp","bisavo_mm",
-                "pelagem","nascimento","sexo","criador","proprietario","modalidade"
+                "pelagem","nascimento","sexo","criador","proprietario","modalidade","microchip"
             ]}
-            regs = []
-            for l in linhas:
-                if _re.match(r'^\d{5,7}$', l):
-                    regs.append(l)
-            if len(regs) > 0: dados["registro_abqm"] = regs[0]
-            if len(regs) > 1: dados["reg_pai"] = regs[1]
-            if len(regs) > 2: dados["reg_mae"] = regs[2]
-            mapa = {"PELAGEM":"pelagem","COR":"pelagem","NASCIMENTO":"nascimento",
-                    "CRIADOR":"criador","PROPRIETÁRIO":"proprietario",
-                    "PROPRIETARIO":"proprietario","MODALIDADE":"modalidade","SEXO":"sexo"}
-            for i, l in enumerate(linhas):
-                lu = l.upper()
-                for kw, campo in mapa.items():
-                    if kw in lu and not dados[campo]:
-                        partes = l.split(":")
-                        if len(partes) > 1 and partes[1].strip():
-                            dados[campo] = partes[1].strip()
-                        elif i + 1 < len(linhas):
-                            dados[campo] = linhas[i+1]
-                if ("PAI" == lu or lu.startswith("PAI ") or lu.startswith("PAI:")) and not dados["pai"]:
-                    if i+1 < len(linhas): dados["pai"] = linhas[i+1]
-                if ("MAE" == lu or "MÃE" == lu or lu.startswith("MÃE") or lu.startswith("MAE")) and not dados["mae"]:
-                    if i+1 < len(linhas): dados["mae"] = linhas[i+1]
-                if ("AVÔ" in lu or "AVO" in lu) and "PAT" in lu and not dados["avo_paterno"]:
-                    if i+1 < len(linhas): dados["avo_paterno"] = linhas[i+1]
-                if ("AVÓ" in lu or "AVO" in lu) and "MAT" in lu and not dados["avo_materno"]:
-                    if i+1 < len(linhas): dados["avo_materno"] = linhas[i+1]
-            for l in linhas:
-                if l.isupper() and len(l) > 5 and not l.isdigit() and l not in ("ABQM","HARAS","REGISTRO","FICHA") and not dados["nome_oficial"]:
-                    dados["nome_oficial"] = l
+
+            # ── Campos diretos por prefixo "Chave: Valor" ──
+            kw_map = {
+                "Nascimento:": "nascimento",
+                "Sexo:": "sexo",
+                "Pelagem:": "pelagem",
+                "Proprietário:": "proprietario",
+                "Criador:": "criador",
+                "Chip:": "microchip",
+                "Modalidade:": "modalidade",
+            }
+            for linha in linhas:
+                for kw, campo in kw_map.items():
+                    if linha.startswith(kw):
+                        val = linha[len(kw):].strip()
+                        if val and val != "--":
+                            dados[campo] = val
+
+            # ── Nome oficial e registro (primeira linha: NOME - PXXXXXX) ──
+            for linha in linhas[:5]:
+                m = _re.match(r'^(.+?)\s*[-–]\s*([P]?\d+)\s*$', linha)
+                if m:
+                    dados["nome_oficial"] = m.group(1).strip()
+                    dados["registro_abqm"] = m.group(2).strip()
                     break
+
+            # ── Filiação: PAI x MÃE REGISTRO ──
+            for linha in linhas:
+                if linha.startswith("Filiação:"):
+                    fil = linha.replace("Filiação:", "").strip()
+                    # Divide em pai e mãe pelo " x " ou " X "
+                    partes = _re.split(r'\s+[xX]\s+', fil, maxsplit=1)
+                    if len(partes) == 2:
+                        dados["pai"] = partes[0].strip()
+                        # Mãe pode ter registro no final: "NOME PXXXXXX"
+                        mae_m = _re.match(r'^(.+?)\s+([P]?\d{4,})\s*$', partes[1].strip())
+                        if mae_m:
+                            dados["mae"] = mae_m.group(1).strip()
+                            dados["reg_mae"] = mae_m.group(2).strip()
+                        else:
+                            dados["mae"] = partes[1].strip()
+                    break
+
+            # ── Árvore genealógica — bloco após "MARCAS E SINAIS" ──
+            # Formato ABQM: pares alternados de NOME / REGISTRO [Pelagem]
+            # Ordem posicional confirmada:
+            # [0]=PAI  [1]=MÃE
+            # [2]=AvôPat  [3]=AvóPat  [4]=AvôMat  [5]=AvóMat
+            # [6]=BisavôPP [7]=BisavôPM [8]=BisavôMP [9]=BisavôMM
+            idx_marcas = None
+            for i, l in enumerate(linhas):
+                if "MARCAS E SINAIS" in l.upper():
+                    idx_marcas = i
+                    break
+
+            inicio_arvore = None
+            if idx_marcas is not None:
+                for i in range(idx_marcas + 1, min(idx_marcas + 6, len(linhas))):
+                    if _re.match(r'^[A-ZÁÉÍÓÚÀÂÊÔÃÕÇÜÑ\s\'\(\)\.]+$', linhas[i]) and len(linhas[i]) > 3:
+                        inicio_arvore = i
+                        break
+            else:
+                # Fallback: procura bloco após última linha de dados
+                for i, l in enumerate(linhas):
+                    if l.startswith("Cert. de Reg") or l.startswith("Pontos:"):
+                        inicio_arvore = i + 1
+                        break
+
+            if inicio_arvore is not None:
+                arvore = linhas[inicio_arvore:]
+                pares = []
+                i = 0
+                while i < len(arvore):
+                    l = arvore[i]
+                    # Nome: apenas letras maiúsculas, espaços, apóstrofos, parênteses
+                    if _re.match(r'^[A-ZÁÉÍÓÚÀÂÊÔÃÕÇÜÑ\s\'\(\)\.]+$', l) and len(l) > 2 and not l.startswith("MARCAS"):
+                        nome = l.strip()
+                        reg = ""
+                        if i + 1 < len(arvore):
+                            prox = arvore[i + 1]
+                            m = _re.match(r'^([P]?\d+)\s*(.*)$', prox)
+                            if m:
+                                reg = m.group(1)
+                                i += 2
+                            else:
+                                i += 1
+                        else:
+                            i += 1
+                        pares.append((nome, reg))
+                    else:
+                        i += 1
+
+                # Mapeamento posicional correto (verificado com PDF real da ABQM)
+                mapa_pos = [
+                    ("pai", "reg_pai"),               # [0]
+                    ("mae", "reg_mae"),                # [1]
+                    ("avo_paterno", "reg_avo_paterno"),# [2]
+                    ("avo_materno", "reg_avo_materno"),# [3] — avó pat (mãe do pai)
+                    (None, None),                      # [4] — avô mat (pai da mãe) ignorado
+                    (None, None),                      # [5] — avó mat (mãe da mãe)
+                    ("bisavo_pp", None),               # [6]
+                    ("bisavo_pm", None),               # [7]
+                    ("bisavo_mp", None),               # [8]
+                    ("bisavo_mm", None),               # [9]
+                ]
+                for idx, (nome_campo, reg_campo) in enumerate(mapa_pos):
+                    if idx < len(pares):
+                        n, r = pares[idx]
+                        if nome_campo and not dados.get(nome_campo):
+                            dados[nome_campo] = n
+                        if reg_campo and not dados.get(reg_campo):
+                            dados[reg_campo] = r
+
+                # Avô e avó maternos nas posições 4 e 5
+                if len(pares) > 4 and not dados["avo_materno"]:
+                    dados["avo_materno"] = pares[4][0]
+                    dados["reg_avo_materno"] = pares[4][1]
+
             return dados
 
         if texto_extraido and st.button("🔍 Extrair dados automaticamente", use_container_width=True):
