@@ -1076,8 +1076,8 @@ div[data-testid="stForm"] button:hover {
 
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        # Padding top para centralizar verticalmente
-        st.markdown("<div style='padding-top:4vh'></div>", unsafe_allow_html=True)
+        # Padding top
+        st.markdown("<div style='padding-top:2vh'></div>", unsafe_allow_html=True)
 
         # Logo
         if os.path.exists(LOGO):
@@ -1085,13 +1085,9 @@ div[data-testid="stForm"] button:hover {
         else:
             st.markdown(_logo_html, unsafe_allow_html=True)
 
-        # Subtítulo
+        # Formulário direto, sem subtítulo duplicado
         st.markdown("""
-<div style='text-align:center;margin:0px 0 10px'>
-  <span style='font-size:0.7rem;color:rgba(201,168,76,0.85);font-weight:500;
-  letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</span>
-</div>
-<div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin-bottom:6px;
+<div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:8px 0 6px;
 padding-left:4px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
