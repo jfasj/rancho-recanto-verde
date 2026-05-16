@@ -3893,7 +3893,16 @@ padding:12px 16px;margin-top:12px;display:flex;align-items:center;gap:12px">
 elif op == "Importar NF-e / XML":
     titulo_pagina("📥 Importar NF-e / XML", "Importe produtos da NF-e para Farmácia ou Ração")
 
-    arquivo_xml = st.file_uploader("Enviar XML da NF-e", type=["xml"])
+    # Upload estilizado
+    st.markdown("""
+<div style='background:var(--surface);border:1px solid var(--line);border-radius:10px;
+padding:16px 20px;margin-bottom:16px'>
+  <div style='font-size:0.82rem;color:var(--muted);margin-bottom:8px'>
+    📎 Selecione o arquivo XML da NF-e (até 50MB)
+  </div>
+""", unsafe_allow_html=True)
+    arquivo_xml = st.file_uploader("", type=["xml"], label_visibility="collapsed")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if arquivo_xml is not None:
         try:
@@ -4118,10 +4127,40 @@ padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
             st.error(f"Não foi possível ler o XML: {e}")
 
     st.markdown("---")
+
+    # ── Excluir item importado errado ────────────────────
+    with st.expander("🗑️ Excluir item importado errado da Farmácia", expanded=False):
+        st.caption("Use aqui para remover um produto que foi importado para a Farmácia por engano.")
+        farm_atual = pd.read_sql_query(
+            "SELECT id, medicamento, quantidade, fornecedor FROM farmacia WHERE medicamento IS NOT NULL ORDER BY medicamento",
+            get_engine()
+        )
+        if not farm_atual.empty:
+            opcoes_del = farm_atual["medicamento"].tolist()
+            item_del = st.selectbox("Selecione o medicamento para excluir", opcoes_del, key="del_farm_nfe")
+            confirmar_del = st.checkbox(f"Confirmo que desejo excluir '{item_del}' da Farmácia")
+            if st.button("🗑️ Excluir da Farmácia", use_container_width=True) and confirmar_del:
+                c.execute("DELETE FROM farmacia WHERE medicamento = %s", (item_del,))
+                conn.commit()
+                listar_farmacia.clear()
+                _carregar_dashboard.clear()
+                st.success(f"✅ '{item_del}' removido da Farmácia!")
+                st.rerun()
+        else:
+            st.info("Nenhum item na Farmácia.")
+
     st.markdown("### Histórico de importações")
-    hist = pd.read_sql_query("SELECT * FROM compras_nfe WHERE produto IS NOT NULL ORDER BY id DESC LIMIT 100", get_engine())
+    hist = pd.read_sql_query(
+        "SELECT numero_nfe, data_emissao, fornecedor, produto, quantidade, unidade, valor_total, data_importacao FROM compras_nfe WHERE produto IS NOT NULL ORDER BY id DESC LIMIT 100",
+        get_engine()
+    )
     if not hist.empty:
-        st.dataframe(hist, use_container_width=True, hide_index=True)
+        st.dataframe(hist.rename(columns={
+            "numero_nfe": "NF-e", "data_emissao": "Emissão",
+            "fornecedor": "Fornecedor", "produto": "Produto",
+            "quantidade": "Qtd", "unidade": "Un",
+            "valor_total": "R$ Total", "data_importacao": "Importado em"
+        }), use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma NF-e importada ainda.")
 
