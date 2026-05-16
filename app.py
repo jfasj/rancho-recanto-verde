@@ -1043,7 +1043,10 @@ if not st.session_state.logado:
     max-width: 100% !important;
 }
 [data-testid="stSidebar"], header, #MainMenu, footer { display: none !important; }
-html, body { background: #1a3a2a !important; }
+html, body { background: #1a3a2a !important; overflow-y: hidden !important; }
+/* Esconde scrollbar mas mantém scroll funcional se necessário */
+html::-webkit-scrollbar { display: none !important; }
+html { -ms-overflow-style: none !important; scrollbar-width: none !important; }
 
 /* Centra o form no meio da tela */
 div[data-testid="stForm"] {
