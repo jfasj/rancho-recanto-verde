@@ -1076,18 +1076,18 @@ div[data-testid="stForm"] button:hover {
 
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        # Padding top
-        st.markdown("<div style='padding-top:2vh'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='padding-top:1vh'></div>", unsafe_allow_html=True)
 
-        # Logo
         if os.path.exists(LOGO):
-            st.image(LOGO, width="stretch")
+            # Centraliza e limita tamanho da logo
+            c1, c2, c3 = st.columns([1, 2, 1])
+            with c2:
+                st.image(LOGO, width="stretch")
         else:
             st.markdown(_logo_html, unsafe_allow_html=True)
 
-        # Formulário direto, sem subtítulo duplicado
         st.markdown("""
-<div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:8px 0 6px;
+<div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:0 0 4px;
 padding-left:4px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
