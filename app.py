@@ -509,48 +509,52 @@ st.markdown("""
 [data-testid="stSidebar"] * { color: rgba(255,255,255,0.75) !important; }
 
 /* Itens do menu lateral */
-[data-testid="stSidebar"] [role="radiogroup"] label,
-[data-testid="stSidebar"] [role="radiogroup"] label p,
-[data-testid="stSidebar"] [role="radiogroup"] label div,
-[data-testid="stSidebar"] [role="radiogroup"] label span {
-    color: rgba(255,255,255,0.75) !important;
-    font-size: 0.88rem !important;
-    font-weight: 400 !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}
 [data-testid="stSidebar"] [role="radiogroup"] label {
     background: transparent !important;
     border: none !important;
     border-radius: 8px;
-    padding: 10px 14px !important;
-    margin: 2px 8px !important;
+    padding: 9px 14px !important;
+    margin: 2px 6px !important;
     transition: all .15s;
-    display: flex !important;
-    align-items: center !important;
+    cursor: pointer;
+    width: 100% !important;
 }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover,
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(255,255,255,0.08) !important;
+}
+/* Texto dos itens */
+[data-testid="stSidebar"] [role="radiogroup"] label p,
+[data-testid="stSidebar"] [role="radiogroup"] label span,
+[data-testid="stSidebar"] [role="radiogroup"] label div {
+    color: rgba(255,255,255,0.78) !important;
+    font-size: 0.88rem !important;
+    font-weight: 400 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    display: inline !important;
+}
 [data-testid="stSidebar"] [role="radiogroup"] label:hover p,
 [data-testid="stSidebar"] [role="radiogroup"] label:hover span {
-    background: rgba(255,255,255,0.08) !important;
     color: #ffffff !important;
 }
-[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label,
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
+/* Item ativo */
+[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label {
     background: rgba(201,168,76,0.15) !important;
     border-left: 3px solid var(--gold) !important;
     border-radius: 0 8px 8px 0 !important;
     margin-left: 0 !important;
-    padding-left: 19px !important;
+    padding-left: 17px !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label p,
 [data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] label span {
     color: var(--gold) !important;
     font-weight: 500 !important;
 }
-/* Esconde o radio button circular */
-[data-testid="stSidebar"] [role="radiogroup"] [data-testid="stMarkdownContainer"] { display: none !important; }
-[data-testid="stSidebar"] [role="radio"] { display: none !important; }
+/* Esconde APENAS o círculo do radio, não o texto */
+[data-testid="stSidebar"] [role="radiogroup"] [data-testid="stWidgetLabel"] { display: none !important; }
+[data-testid="stSidebar"] [role="radiogroup"] svg { display: none !important; }
+[data-testid="stSidebar"] [role="radiogroup"] input[type="radio"] { display: none !important; }
+
 
 /* ── Tipografia ── */
 h1, h2, h3 {
