@@ -502,6 +502,19 @@ st.markdown("""
     padding-top: 1.5rem !important;
 }
 
+/* ── Esconde elementos do Streamlit que não queremos ── */
+/* Nome do arquivo no topo da sidebar */
+[data-testid="stSidebarHeader"] { display: none !important; }
+[data-testid="stSidebarNavItems"] { display: none !important; }
+/* Toolbar superior (deploy, share icons) */
+[data-testid="stToolbar"] { display: none !important; }
+/* Decoração superior */
+[data-testid="stDecoration"] { display: none !important; }
+/* App top menu */
+#MainMenu { display: none !important; }
+/* Status widget */
+[data-testid="stStatusWidget"] { display: none !important; }
+
 /* ── Sidebar — verde escuro como ABQM ── */
 [data-testid="stSidebar"] {
     background: var(--sidebar) !important;
