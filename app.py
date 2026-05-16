@@ -3891,9 +3891,7 @@ padding:12px 16px;margin-top:12px;display:flex;align-items:center;gap:12px">
 # =========================================================
 
 elif op == "Importar NF-e / XML":
-    titulo_pagina("📥 Importar NF-e / XML", "Importe produtos da nota fiscal diretamente para a Farmácia")
-
-    st.info("O código de barras da NF-e normalmente identifica a chave de acesso. Para trazer os produtos automaticamente, envie o XML da NF-e.")
+    titulo_pagina("📥 Importar NF-e / XML", "Importe produtos da NF-e para Farmácia ou Ração")
 
     arquivo_xml = st.file_uploader("Enviar XML da NF-e", type=["xml"])
 
@@ -3902,58 +3900,93 @@ elif op == "Importar NF-e / XML":
             dados_nfe = ler_xml_nfe(arquivo_xml.read())
             produtos = dados_nfe["produtos"]
 
-            st.markdown("### Dados da NF-e")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Número NF-e", dados_nfe["numero_nfe"] or "-")
-            with col2:
-                st.metric("Fornecedor", dados_nfe["fornecedor"][:22] if dados_nfe["fornecedor"] else "-")
-            with col3:
-                st.metric("Produtos", len(produtos))
+            # Cabeçalho da NF-e
+            st.markdown(f"""
+<div style='background:var(--surface);border:1px solid var(--line);border-radius:10px;
+padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
+  <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>NF-e</div>
+       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("numero_nfe","—")}</div></div>
+  <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Fornecedor</div>
+       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("fornecedor","—")}</div></div>
+  <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Emissão</div>
+       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("data_emissao","—")}</div></div>
+  <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Produtos</div>
+       <div style='font-weight:500;color:var(--text)'>{len(produtos)}</div></div>
+</div>
+""", unsafe_allow_html=True)
 
             if not produtos:
                 st.warning("Nenhum produto encontrado no XML.")
             else:
-                df_produtos = pd.DataFrame(produtos)
-                df_produtos["categoria"] = "Outro"
-                df_produtos["estoque_min"] = 0.0
-                df_produtos["validade"] = ""
-                df_produtos["importar"] = True
+                st.markdown("### Classifique cada produto e escolha o destino")
+                st.caption("Para cada produto, escolha se vai para a **Farmácia** (medicamentos) ou para a **Ração** (ração, suplemento, sal mineral). Você pode desmarcar os que não quer importar.")
 
-                df_produtos["volume_por_unidade"] = df_produtos["produto"].apply(lambda x: extrair_volume_descricao(x)[0])
-                df_produtos["unidade_controle"] = df_produtos["produto"].apply(lambda x: extrair_volume_descricao(x)[1])
-                df_produtos["estoque_convertido"] = df_produtos.apply(
-                    lambda r: calcular_estoque_convertido(limpar_numero(r["quantidade"]), limpar_numero(r["volume_por_unidade"])),
-                    axis=1
-                )
-                df_produtos["preco_por_controle"] = df_produtos.apply(
-                    lambda r: calcular_preco_por_controle(limpar_numero(r["valor_total"]), limpar_numero(r["estoque_convertido"])),
-                    axis=1
-                )
+                # Categorias por destino
+                cats_farmacia = ["Antibiótico","Anti-inflamatório","Vermífugo","Vacina","Suplemento","Curativo","Hormônio","Reprodução","Outro"]
+                cats_racao    = ["Ração","Suplemento","Sal Mineral","Volumoso","Outro"]
 
-                st.markdown("### Produtos encontrados")
-                st.caption("Revise os dados antes de importar. Validade normalmente não vem no XML e pode ser ajustada depois na Farmácia. O valor importado para estoque será o VALOR TOTAL do item da NF-e. O sistema também tentará identificar automaticamente o volume na descrição, como 50ML, 100ML ou 1L.")
+                # Monta df editável com coluna destino
+                rows = []
+                for p in produtos:
+                    nome = p.get("produto","")
+                    # Heurística de destino pelo nome
+                    nome_up = nome.upper()
+                    if any(x in nome_up for x in ["RAÇAO","RACAO","RAÇÃO","FENO","SAL MIN","SUPL","PREMIX","VOLUMOSO","FARELO"]):
+                        destino_auto = "🌾 Ração"
+                    else:
+                        destino_auto = "💊 Farmácia"
+                    rows.append({
+                        "importar": True,
+                        "destino": destino_auto,
+                        "produto": nome,
+                        "quantidade": p.get("quantidade","1"),
+                        "unidade": p.get("unidade","UN"),
+                        "valor_unitario": p.get("valor_unitario","0"),
+                        "valor_total": p.get("valor_total","0"),
+                        "ncm": p.get("ncm",""),
+                        "categoria": "Outro",
+                    })
+
+                df_edit = pd.DataFrame(rows)
 
                 df_editado = st.data_editor(
-                    df_produtos[[
-                        "importar", "produto", "ncm", "quantidade", "unidade",
-                        "valor_unitario", "valor_total", "volume_por_unidade",
-                        "unidade_controle", "estoque_convertido", "preco_por_controle",
-                        "categoria", "estoque_min", "validade"
-                    ]],
+                    df_edit,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
+                        "importar": st.column_config.CheckboxColumn("Importar", default=True),
+                        "destino": st.column_config.SelectboxColumn(
+                            "Destino",
+                            options=["💊 Farmácia", "🌾 Ração"],
+                            required=True
+                        ),
                         "categoria": st.column_config.SelectboxColumn(
-                            "categoria",
-                            options=["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Outro"]
-                        )
+                            "Categoria",
+                            options=cats_farmacia + [c for c in cats_racao if c not in cats_farmacia]
+                        ),
+                        "produto":        st.column_config.TextColumn("Produto"),
+                        "quantidade":     st.column_config.TextColumn("Qtd"),
+                        "unidade":        st.column_config.TextColumn("Un"),
+                        "valor_unitario": st.column_config.TextColumn("R$ Unit."),
+                        "valor_total":    st.column_config.TextColumn("R$ Total"),
                     }
                 )
 
-                if st.button("Importar produtos selecionados para Farmácia"):
-                    importados = 0
-                    atualizados = 0
+                # Separação visual
+                df_farm = df_editado[df_editado["importar"] & (df_editado["destino"] == "💊 Farmácia")]
+                df_rac  = df_editado[df_editado["importar"] & (df_editado["destino"] == "🌾 Ração")]
+
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    st.markdown(f"**💊 Farmácia:** {len(df_farm)} produto(s)")
+                with col_r2:
+                    st.markdown(f"**🌾 Ração:** {len(df_rac)} produto(s)")
+
+                if st.button("📥 Importar para os estoques corretos", use_container_width=True):
+                    importados_farm = 0
+                    atualizados_farm = 0
+                    importados_rac = 0
+                    atualizados_rac = 0
 
                     for _, row in df_editado.iterrows():
                         if not bool(row.get("importar", False)):
@@ -3963,153 +3996,130 @@ elif op == "Importar NF-e / XML":
                         if not produto_nome:
                             continue
 
-                        quantidade = limpar_numero(row["quantidade"])
-                        preco = limpar_numero(row["valor_unitario"])
-                        unidade = str(row["unidade"])
-                        categoria = str(row["categoria"])
-                        estoque_min = limpar_numero(row["estoque_min"])
-                        validade = str(row["validade"] or "")
+                        quantidade   = limpar_numero(row["quantidade"])
+                        valor_total  = limpar_numero(row["valor_total"])
+                        valor_unit   = limpar_numero(row["valor_unitario"])
+                        unidade      = str(row["unidade"])
+                        categoria    = str(row["categoria"])
+                        destino      = str(row["destino"])
 
-                        existente = pd.read_sql_query(
-                            "SELECT * FROM farmacia WHERE medicamento = %s", get_engine(),
-                            params=(produto_nome,)
-                        )
-
-                        if existente.empty:
-                            valor_total_item = limpar_numero(row["valor_total"])
-                            volume_por_unidade = limpar_numero(row.get("volume_por_unidade", 0))
-                            unidade_controle = str(row.get("unidade_controle", "") or "").strip()
-                            if not volume_por_unidade:
-                                volume_por_unidade, unidade_controle_extraida = extrair_volume_descricao(produto_nome)
-                                unidade_controle = unidade_controle or unidade_controle_extraida
-
-                            unidade_controle = unidade_controle or sugerir_unidade_controle(produto_nome, unidade)
-                            estoque_convertido = calcular_estoque_convertido(quantidade, volume_por_unidade)
-                            preco_por_controle = calcular_preco_por_controle(valor_total_item, estoque_convertido)
-
-                            c.execute("""
-                                INSERT INTO farmacia
-                                (medicamento, categoria, quantidade, estoque_min, unidade,
-                                 preco, validade, fornecedor, obs,
-                                 quantidade_compra, unidade_compra, volume_por_unidade,
-                                 unidade_controle, estoque_convertido, estoque_min_controle,
-                                 preco_por_controle)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (
-                                produto_nome,
-                                categoria,
-                                str(quantidade),
-                                str(estoque_min),
-                                unidade,
-                                str(valor_total_item),
-                                validade,
-                                dados_nfe["fornecedor"],
-                                f"Importado da NF-e {dados_nfe['numero_nfe']} | Valor total do item",
-                                str(quantidade),
-                                unidade,
-                                str(volume_por_unidade),
-                                unidade_controle,
-                                str(estoque_convertido),
-                                str(estoque_min),
-                                str(preco_por_controle)
-                            ))
-                            importados += 1
-                        else:
-                            qtd_atual = limpar_numero(existente.iloc[0]["quantidade"])
-                            nova_qtd = qtd_atual + quantidade
-
-                            valor_total_item = limpar_numero(row["valor_total"])
-                            preco_atual_total = limpar_numero(existente.iloc[0].get("preco", 0))
-                            novo_preco_total = preco_atual_total + valor_total_item
-
-                            unidade_controle_existente = existente.iloc[0].get("unidade_controle", "")
-                            volume_existente = limpar_numero(existente.iloc[0].get("volume_por_unidade", 0))
-
-                            volume_editado = limpar_numero(row.get("volume_por_unidade", 0))
-                            unidade_editada = str(row.get("unidade_controle", "") or "").strip()
-                            volume_extraido, unidade_extraida = extrair_volume_descricao(produto_nome)
-
-                            unidade_controle = unidade_editada or unidade_controle_existente or unidade_extraida or sugerir_unidade_controle(produto_nome, unidade)
-                            volume_por_unidade = volume_editado or (volume_existente if volume_existente > 1 else volume_extraido)
-
-                            estoque_convertido_atual = limpar_numero(existente.iloc[0].get("estoque_convertido", 0))
-                            estoque_convertido_entrada = calcular_estoque_convertido(quantidade, volume_por_unidade)
-                            novo_estoque_convertido = estoque_convertido_atual + estoque_convertido_entrada
-
-                            preco_por_controle = calcular_preco_por_controle(novo_preco_total, novo_estoque_convertido)
-
-                            c.execute("""
-                                UPDATE farmacia
-                                SET quantidade = %s,
-                                    preco = %s,
-                                    fornecedor = %s,
-                                    quantidade_compra = %s,
-                                    unidade_compra = %s,
-                                    volume_por_unidade = %s,
-                                    unidade_controle = %s,
-                                    estoque_convertido = %s,
-                                    preco_por_controle = %s
-                                WHERE medicamento = %s
-                            """, (
-                                str(nova_qtd),
-                                str(novo_preco_total),
-                                dados_nfe["fornecedor"],
-                                str(nova_qtd),
-                                unidade,
-                                str(volume_por_unidade),
-                                unidade_controle,
-                                str(novo_estoque_convertido),
-                                str(preco_por_controle),
-                                produto_nome
-                            ))
-                            atualizados += 1
-
+                        # Registra na NF-e histórico
                         c.execute("""
                             INSERT INTO compras_nfe
                             (chave_nfe, numero_nfe, data_emissao, fornecedor,
                              cnpj_fornecedor, produto, ncm, quantidade, unidade,
                              valor_unitario, valor_total, data_importacao)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         """, (
-                            dados_nfe["chave_nfe"],
-                            dados_nfe["numero_nfe"],
-                            dados_nfe["data_emissao"],
-                            dados_nfe["fornecedor"],
-                            dados_nfe["cnpj_fornecedor"],
-                            produto_nome,
-                            str(row["ncm"]),
-                            str(quantidade),
-                            unidade,
-                            str(preco),
-                            str(limpar_numero(row["valor_total"])),
+                            dados_nfe.get("chave_nfe",""),
+                            dados_nfe.get("numero_nfe",""),
+                            dados_nfe.get("data_emissao",""),
+                            dados_nfe.get("fornecedor",""),
+                            dados_nfe.get("cnpj_fornecedor",""),
+                            produto_nome, str(row["ncm"]),
+                            str(quantidade), unidade,
+                            str(valor_unit), str(valor_total),
                             datetime.now().strftime("%d/%m/%Y %H:%M")
                         ))
 
+                        # ── DESTINO: FARMÁCIA ──
+                        if "Farmácia" in destino:
+                            existente = pd.read_sql_query(
+                                "SELECT * FROM farmacia WHERE medicamento = %s",
+                                get_engine(), params=(produto_nome,)
+                            )
+                            volume_por_unidade, unidade_controle = extrair_volume_descricao(produto_nome)
+                            unidade_controle = unidade_controle or sugerir_unidade_controle(produto_nome, unidade)
+                            estoque_convertido = calcular_estoque_convertido(quantidade, volume_por_unidade)
+                            preco_por_controle = calcular_preco_por_controle(valor_total, estoque_convertido)
+
+                            if existente.empty:
+                                c.execute("""
+                                    INSERT INTO farmacia
+                                    (medicamento, categoria, quantidade, estoque_min, unidade,
+                                     preco, validade, fornecedor, obs,
+                                     quantidade_compra, unidade_compra, volume_por_unidade,
+                                     unidade_controle, estoque_convertido, estoque_min_controle,
+                                     preco_por_controle)
+                                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                """, (
+                                    produto_nome, categoria, str(quantidade), "0", unidade,
+                                    str(valor_total), "", dados_nfe.get("fornecedor",""),
+                                    f"NF-e {dados_nfe.get('numero_nfe','')}",
+                                    str(quantidade), unidade, str(volume_por_unidade),
+                                    unidade_controle, str(estoque_convertido), "0",
+                                    str(preco_por_controle)
+                                ))
+                                importados_farm += 1
+                            else:
+                                qtd_atual = limpar_numero(existente.iloc[0]["quantidade"])
+                                preco_atual = limpar_numero(existente.iloc[0].get("preco", 0))
+                                est_conv_atual = limpar_numero(existente.iloc[0].get("estoque_convertido", 0))
+                                nova_qtd = qtd_atual + quantidade
+                                novo_preco = preco_atual + valor_total
+                                novo_est_conv = est_conv_atual + estoque_convertido
+                                novo_preco_ctrl = calcular_preco_por_controle(novo_preco, novo_est_conv)
+                                c.execute("""
+                                    UPDATE farmacia SET quantidade=%s, preco=%s,
+                                    estoque_convertido=%s, preco_por_controle=%s,
+                                    fornecedor=%s WHERE medicamento=%s
+                                """, (str(nova_qtd), str(novo_preco), str(novo_est_conv),
+                                      str(novo_preco_ctrl), dados_nfe.get("fornecedor",""), produto_nome))
+                                atualizados_farm += 1
+
+                        # ── DESTINO: RAÇÃO ──
+                        elif "Ração" in destino:
+                            preco_kg = round(valor_total / quantidade, 4) if quantidade > 0 else 0
+                            existente_r = pd.read_sql_query(
+                                "SELECT id, quantidade_kg FROM racao_estoque WHERE produto = %s",
+                                get_engine(), params=(produto_nome,)
+                            )
+                            if existente_r.empty:
+                                c.execute("""
+                                    INSERT INTO racao_estoque
+                                    (produto, categoria, quantidade_kg, unidade, data_compra,
+                                     fornecedor, preco_total, preco_kg, estoque_minimo, obs)
+                                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                """, (
+                                    produto_nome, categoria, str(quantidade), unidade,
+                                    datetime.now().strftime("%d/%m/%Y"),
+                                    dados_nfe.get("fornecedor",""),
+                                    str(valor_total), str(preco_kg), "50",
+                                    f"NF-e {dados_nfe.get('numero_nfe','')}"
+                                ))
+                                importados_rac += 1
+                            else:
+                                qtd_atual_r = float(existente_r.iloc[0]["quantidade_kg"] or 0)
+                                c.execute(
+                                    "UPDATE racao_estoque SET quantidade_kg=%s, preco_total=%s, preco_kg=%s, fornecedor=%s WHERE produto=%s",
+                                    (str(qtd_atual_r + quantidade), str(valor_total),
+                                     str(preco_kg), dados_nfe.get("fornecedor",""), produto_nome)
+                                )
+                                atualizados_rac += 1
+
                     conn.commit()
-                    st.success(f"Importação concluída: {importados} novos itens e {atualizados} itens atualizados no estoque.")
+                    listar_farmacia.clear()
+                    _carregar_estoque_racao.clear()
+
+                    partes = []
+                    if importados_farm or atualizados_farm:
+                        partes.append(f"💊 Farmácia: {importados_farm} novos, {atualizados_farm} atualizados")
+                    if importados_rac or atualizados_rac:
+                        partes.append(f"🌾 Ração: {importados_rac} novos, {atualizados_rac} atualizados")
+                    st.success("✅ Importação concluída! " + " | ".join(partes))
 
         except Exception as e:
             st.error(f"Não foi possível ler o XML: {e}")
 
     st.markdown("---")
-    st.markdown("### Histórico de compras importadas")
-
-    hist = pd.read_sql_query("SELECT * FROM compras_nfe WHERE produto IS NOT NULL", get_engine())
+    st.markdown("### Histórico de importações")
+    hist = pd.read_sql_query("SELECT * FROM compras_nfe WHERE produto IS NOT NULL ORDER BY id DESC LIMIT 100", get_engine())
     if not hist.empty:
-        st.dataframe(hist, use_container_width=True)
-        st.download_button(
-            "📥 Baixar Histórico de Compras",
-            data=gerar_excel(hist),
-            file_name="historico_compras_nfe.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.dataframe(hist, use_container_width=True, hide_index=True)
     else:
-        st.info("Nenhuma compra importada ainda.")
+        st.info("Nenhuma NF-e importada ainda.")
 
 
-# =========================================================
-# FARMÁCIA
-# =========================================================
 
 elif op == "Farmácia":
     titulo_pagina("💊 Farmácia", "Controle de estoque, custo e conversão para mL/L")
