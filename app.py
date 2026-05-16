@@ -1029,38 +1029,36 @@ if "logado" not in st.session_state:
 
 if not st.session_state.logado:
 
-    # Fundo verde escuro cobrindo toda a tela
+    # CSS só para a tela de login
     st.markdown("""
 <style>
 .stApp { background: #1a3a2a !important; }
-.main .block-container { padding: 0 !important; max-width: 100% !important; }
 [data-testid="stSidebar"] { display: none !important; }
-header { display: none !important; }
+header[data-testid="stHeader"] { display: none !important; }
+.main .block-container { padding-top: 0 !important; }
 </style>
-<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#1a3a2a;position:fixed;top:0;left:0;right:0;bottom:0;z-index:999">
-  <div style="width:100%;max-width:420px;padding:24px;text-align:center">
-</div>
-</div>
 """, unsafe_allow_html=True)
+
+    # Espaço para centralizar verticalmente
+    st.markdown("<div style='height:6vh'></div>", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 1.4, 1])
     with col2:
-        # Logo
         if os.path.exists(LOGO):
-            st.image(LOGO, use_container_width=True)
+            st.image(LOGO, width="stretch")
         else:
             st.markdown("""
 <div style='text-align:center;padding:20px 0 8px'>
-  <div style='font-family:"Playfair Display",serif;font-size:2rem;color:#c9a84c;font-weight:700'>RRV</div>
+  <div style='font-family:"Playfair Display",serif;font-size:2.5rem;color:#c9a84c;font-weight:700'>RRV</div>
 </div>
 """, unsafe_allow_html=True)
 
         st.markdown("""
-<div style='text-align:center;margin-bottom:28px'>
+<div style='text-align:center;margin-bottom:24px'>
   <div style='font-size:0.72rem;color:rgba(201,168,76,0.8);font-weight:500;letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</div>
 </div>
-<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.2);border-radius:16px;padding:24px 20px;backdrop-filter:blur(10px)'>
-  <div style='font-size:1rem;font-weight:500;color:#ffffff;margin-bottom:20px;text-align:left'>🔒 Acesso ao Sistema</div>
+<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.25);border-radius:16px;padding:24px 20px 8px;'>
+  <div style='font-size:1rem;font-weight:500;color:#ffffff;margin-bottom:18px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
         nome_login = st.text_input("Usuário", placeholder="Digite seu usuário")
@@ -1552,7 +1550,7 @@ def atualizar_farmacia_antiga_para_controle():
 
 with st.sidebar:
     if os.path.exists(LOGO):
-        st.image(LOGO, use_container_width=True)
+        st.image(LOGO, width="stretch")
     else:
         st.markdown("""
 <div style='padding:4px 0 16px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:12px'>
