@@ -257,6 +257,10 @@ _SCHEMA = {
         "titulo", "tipo", "data", "hora_inicio", "hora_fim",
         "animal", "funcionario", "descricao", "status", "cor", "obs",
     ],
+    "auditoria": [
+        "usuario", "perfil", "modulo", "acao", "descricao",
+        "data_hora", "ip",
+    ],
     "racao_estoque": [
         "produto", "categoria", "quantidade_kg", "unidade",
         "data_compra", "validade", "fornecedor", "preco_total",
@@ -383,7 +387,25 @@ def hash_senha(senha):
     return hashlib.sha256(str(senha).encode("utf-8")).hexdigest()
 
 
-def _get_secret_early(nome, padrao=""):
+def registrar_auditoria(modulo, acao, descricao=""):
+    """Registra toda ação importante do usuário logado."""
+    try:
+        usuario_atual = st.session_state.get("usuario", {})
+        nome_u = usuario_atual.get("nome", "sistema")
+        perfil_u = usuario_atual.get("perfil", "")
+        c.execute("""
+            INSERT INTO auditoria (usuario, perfil, modulo, acao, descricao, data_hora)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            nome_u, perfil_u, modulo, acao,
+            str(descricao)[:500],
+            datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        ))
+        conn.commit()
+    except Exception:
+        pass  # Nunca deixa auditoria quebrar o fluxo principal
+
+
     """Versão antecipada de get_secret_value para uso no boot."""
     try:
         if nome in st.secrets:
@@ -1136,6 +1158,7 @@ padding-left:4px'>🔒 Acesso ao Sistema</div>
                 st.session_state.logado       = True
                 st.session_state.usuario      = usuario
                 st.session_state.pagina_atual = "Dashboard"
+                registrar_auditoria("Login", "Acesso", f"Login realizado com sucesso")
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos.")
@@ -2308,6 +2331,7 @@ border-left:4px solid #e05a5a;border-radius:10px;padding:14px 18px;margin-bottom
                         msg = f"✅ Produto '{r_produto}' cadastrado com {r_qtd:.1f} kg!"
                     conn.commit()
                     _carregar_estoque_racao.clear()
+                    registrar_auditoria("Ração", "Compra", f"Produto '{r_produto}' registrado no estoque")
                     st.success(msg)
                     st.rerun()
 
@@ -2975,6 +2999,7 @@ elif op == "Animais por Tipo":
                     conn.commit()
                     listar_animais.clear()
                     _carregar_dashboard.clear()
+                    registrar_auditoria("Animais", "Alteração", f"Animal '{animal_nome}' alterado")
                     st.success("Animal alterado com sucesso!")
                     st.rerun()
 
@@ -3210,6 +3235,7 @@ padding:12px 16px;margin-bottom:8px'>
                               confirmado_por, rid))
                         conn.commit()
                         listar_farmacia.clear()
+                        registrar_auditoria("Sanitário", "Confirmação de aplicação", f"Aplicação confirmada: {row.get("produto","")} em {row.get("animal","")}")
                         st.rerun()
 
                 with col_c3:
@@ -5982,16 +6008,204 @@ elif op == "Relatórios / Gráficos":
 # =========================================================
 
 elif op == "Admin / Usuários":
-    titulo_pagina("⚙️ Admin / Usuários", "Cadastro de usuários e liberação de acessos")
+    titulo_pagina("⚙️ Admin / Usuários", "Cadastro de usuários, senhas e auditoria do sistema")
 
     if st.session_state.usuario.get("perfil") != "Administrador":
         st.error("Apenas administradores podem acessar esta área.")
+        st.stop()
 
     aba = st.radio(
         "Opção",
-        ["Cadastrar Usuário", "Usuários Cadastrados", "Alterar Senha"],
+        ["👤 Cadastrar Usuário", "📋 Usuários Cadastrados", "🔑 Resetar Senha", "📜 Auditoria"],
         horizontal=True
     )
+
+    # ── CADASTRAR USUÁRIO ───────────────────────────────
+    if aba == "👤 Cadastrar Usuário":
+        st.markdown("### Novo usuário")
+        col1, col2 = st.columns(2)
+        with col1:
+            nome_usuario  = st.text_input("Nome de login *")
+            senha_usuario = st.text_input("Senha *", type="password")
+            perfil        = st.selectbox("Perfil", list(PERFIS.keys()))
+        with col2:
+            ativo = st.selectbox("Ativo", ["Sim", "Não"])
+            st.info("Permissões liberadas automaticamente pelo perfil.")
+            st.caption("Permissões: " + ", ".join(PERFIS[perfil]))
+
+        if st.button("💾 Salvar Usuário", use_container_width=True):
+            if not nome_usuario or not senha_usuario:
+                st.error("Informe nome e senha.")
+            else:
+                existente = pd.read_sql_query(
+                    "SELECT id FROM usuarios WHERE nome = %s", get_engine(), params=(nome_usuario,)
+                )
+                if not existente.empty:
+                    st.error("Já existe usuário com esse nome.")
+                else:
+                    c.execute("""
+                        INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (nome_usuario, hash_senha(senha_usuario), perfil, "|".join(PERFIS[perfil]), ativo))
+                    conn.commit()
+                    registrar_auditoria("Admin", "Cadastro de usuário", f"Usuário '{nome_usuario}' criado com perfil '{perfil}'")
+                    st.success(f"✅ Usuário '{nome_usuario}' cadastrado com sucesso!")
+
+    # ── USUÁRIOS CADASTRADOS ────────────────────────────
+    elif aba == "📋 Usuários Cadastrados":
+        df = pd.read_sql_query("SELECT id, nome, perfil, ativo FROM usuarios ORDER BY nome", get_engine())
+        if not df.empty:
+            st.dataframe(df.rename(columns={"id":"ID","nome":"Usuário","perfil":"Perfil","ativo":"Ativo"}),
+                        use_container_width=True, hide_index=True)
+
+            st.markdown("### Editar usuário")
+            opcoes_u = (df["id"].astype(str) + " — " + df["nome"]).tolist()
+            escolha_u = st.selectbox("Selecione", opcoes_u)
+            usuario_id = escolha_u.split(" — ")[0]
+            usuario_row = pd.read_sql_query("SELECT * FROM usuarios WHERE id = %s", get_engine(), params=(usuario_id,)).iloc[0]
+
+            col1, col2 = st.columns(2)
+            with col1:
+                novo_perfil = st.selectbox("Perfil", list(PERFIS.keys()),
+                    index=list(PERFIS.keys()).index(usuario_row["perfil"]) if usuario_row["perfil"] in PERFIS else 0)
+                novo_ativo  = st.selectbox("Ativo", ["Sim", "Não"],
+                    index=0 if usuario_row["ativo"] == "Sim" else 1)
+            with col2:
+                perms_atuais = str(usuario_row["permissoes"] or "").split("|")
+                novas_perms  = st.multiselect("Permissões customizadas", TODAS_PERMISSOES,
+                    default=[p for p in perms_atuais if p in TODAS_PERMISSOES])
+
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("💾 Atualizar", use_container_width=True):
+                    c.execute("""
+                        UPDATE usuarios SET perfil=%s, permissoes=%s, ativo=%s WHERE id=%s
+                    """, (novo_perfil, "|".join(novas_perms), novo_ativo, usuario_id))
+                    conn.commit()
+                    registrar_auditoria("Admin", "Edição de usuário", f"Usuário ID {usuario_id} atualizado: perfil={novo_perfil}, ativo={novo_ativo}")
+                    st.success("✅ Usuário atualizado!")
+            with col_b2:
+                if st.button("🗑️ Desativar usuário", use_container_width=True):
+                    c.execute("UPDATE usuarios SET ativo='Não' WHERE id=%s", (usuario_id,))
+                    conn.commit()
+                    registrar_auditoria("Admin", "Desativação de usuário", f"Usuário ID {usuario_id} desativado")
+                    st.success("Usuário desativado.")
+                    st.rerun()
+        else:
+            st.warning("Nenhum usuário cadastrado.")
+
+    # ── RESETAR SENHA ───────────────────────────────────
+    elif aba == "🔑 Resetar Senha":
+        titulo_pagina("🔑 Resetar Senha", "Redefina a senha de qualquer usuário — use quando o colaborador esquecer")
+
+        st.markdown("""
+<div style='background:rgba(232,184,75,0.1);border:1px solid rgba(232,184,75,0.25);
+border-left:4px solid #e8b84b;border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:16px'>
+  <div style='font-weight:500;color:#e8b84b;margin-bottom:4px'>📋 Procedimento para senha esquecida:</div>
+  <div style='font-size:0.82rem;color:var(--muted);line-height:1.8'>
+    1. Selecione o usuário abaixo<br>
+    2. Defina uma senha provisória simples (ex: o nome do colaborador)<br>
+    3. Clique em <strong>Resetar Senha</strong><br>
+    4. Informe a senha provisória ao colaborador pessoalmente<br>
+    5. Peça para ele trocar a senha no próximo acesso em <strong>Meu Perfil</strong>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+        df_u = pd.read_sql_query("SELECT id, nome, perfil FROM usuarios ORDER BY nome", get_engine())
+        if not df_u.empty:
+            opcoes_reset = (df_u["nome"] + " (" + df_u["perfil"] + ")").tolist()
+            idx_reset = st.selectbox("Selecione o usuário", range(len(opcoes_reset)),
+                                     format_func=lambda i: opcoes_reset[i])
+            usuario_reset_id = str(df_u.iloc[idx_reset]["id"])
+            usuario_reset_nome = df_u.iloc[idx_reset]["nome"]
+
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                nova_senha_reset = st.text_input("Nova senha provisória *", type="password",
+                                                  placeholder="Ex: rancho2026")
+            with col_r2:
+                confirmar_reset = st.text_input("Confirmar nova senha *", type="password")
+
+            if st.button("🔑 Resetar Senha", use_container_width=True):
+                if not nova_senha_reset:
+                    st.error("Informe a nova senha.")
+                elif nova_senha_reset != confirmar_reset:
+                    st.error("As senhas não coincidem.")
+                elif len(nova_senha_reset) < 4:
+                    st.error("Senha deve ter pelo menos 4 caracteres.")
+                else:
+                    c.execute(
+                        "UPDATE usuarios SET senha_hash = %s WHERE id = %s",
+                        (hash_senha(nova_senha_reset), usuario_reset_id)
+                    )
+                    conn.commit()
+                    registrar_auditoria("Admin", "Reset de senha", f"Senha de '{usuario_reset_nome}' redefinida pelo administrador")
+                    st.success(f"✅ Senha de **{usuario_reset_nome}** redefinida com sucesso!")
+                    st.info(f"📱 Informe ao colaborador que a nova senha provisória está definida. Peça para trocar no próximo acesso.")
+        else:
+            st.warning("Nenhum usuário cadastrado.")
+
+    # ── AUDITORIA ───────────────────────────────────────
+    elif aba == "📜 Auditoria":
+        titulo_pagina("📜 Auditoria do Sistema", "Registro de todas as ações realizadas no sistema")
+
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            filtro_usuario_aud = st.text_input("Filtrar usuário")
+        with col_f2:
+            filtro_modulo_aud  = st.text_input("Filtrar módulo")
+        with col_f3:
+            filtro_acao_aud    = st.text_input("Filtrar ação")
+
+        try:
+            df_aud = pd.read_sql_query(
+                "SELECT * FROM auditoria ORDER BY id DESC LIMIT 500",
+                get_engine()
+            )
+        except Exception:
+            df_aud = pd.DataFrame()
+
+        if not df_aud.empty:
+            if filtro_usuario_aud:
+                df_aud = df_aud[df_aud["usuario"].str.contains(filtro_usuario_aud, case=False, na=False)]
+            if filtro_modulo_aud:
+                df_aud = df_aud[df_aud["modulo"].str.contains(filtro_modulo_aud, case=False, na=False)]
+            if filtro_acao_aud:
+                df_aud = df_aud[df_aud["acao"].str.contains(filtro_acao_aud, case=False, na=False)]
+
+            st.metric("Registros encontrados", len(df_aud))
+
+            # Resumo por usuário
+            if not df_aud.empty:
+                st.markdown("#### Atividade por usuário")
+                resumo = df_aud.groupby("usuario")["acao"].count().reset_index()
+                resumo.columns = ["Usuário", "Ações registradas"]
+                resumo = resumo.sort_values("Ações registradas", ascending=False)
+                st.dataframe(resumo, use_container_width=True, hide_index=True)
+
+                st.markdown("#### Log completo")
+                cols_show = ["data_hora", "usuario", "perfil", "modulo", "acao", "descricao"]
+                cols_show = [c0 for c0 in cols_show if c0 in df_aud.columns]
+                st.dataframe(
+                    df_aud[cols_show].rename(columns={
+                        "data_hora": "Data/Hora", "usuario": "Usuário",
+                        "perfil": "Perfil", "modulo": "Módulo",
+                        "acao": "Ação", "descricao": "Descrição"
+                    }),
+                    use_container_width=True, hide_index=True
+                )
+
+                st.download_button(
+                    "📥 Exportar Auditoria (Excel)",
+                    data=gerar_excel(df_aud),
+                    file_name=f"auditoria_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.info("Nenhuma ação registrada ainda. As ações serão registradas automaticamente a partir de agora.")
+
+
 
     if aba == "Cadastrar Usuário":
         st.markdown("### Novo usuário")
