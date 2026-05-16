@@ -408,6 +408,7 @@ def atualizar_admin_permissoes():
     conn.commit()
 
 
+@st.cache_data(ttl=300)
 def carregar_usuario(nome):
     df = pd.read_sql_query(
         "SELECT * FROM usuarios WHERE nome = %s AND ativo = 'Sim'",
@@ -449,7 +450,7 @@ st.markdown("""
    Sidebar: verde escuro  |  Corpo: creme/areia  |  Acento: dourado
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=DM+Sans:wght@400;500&display=swap&subset=latin');
 
 :root {
     /* Cores base — tema verde escuro + creme */
@@ -895,7 +896,7 @@ def moeda(valor):
         return "R$ 0,00"
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def listar_animais(somente_ativos=False):
     df = pd.read_sql_query("SELECT * FROM animais WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if somente_ativos and not df.empty and "status" in df.columns:
@@ -903,12 +904,12 @@ def listar_animais(somente_ativos=False):
     return df
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def listar_farmacia():
     return pd.read_sql_query("SELECT * FROM farmacia WHERE medicamento IS NOT NULL AND medicamento != ''", get_engine())
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def _carregar_dashboard():
     """Carrega todos os dados do dashboard em paralelo — cacheado 60s."""
     engine = get_engine()
@@ -1079,10 +1080,7 @@ div[data-testid="stForm"] button:hover {
         st.markdown("<div style='padding-top:1vh'></div>", unsafe_allow_html=True)
 
         if os.path.exists(LOGO):
-            # Centraliza e limita tamanho da logo
-            c1, c2, c3 = st.columns([1, 2, 1])
-            with c2:
-                st.image(LOGO, width="stretch")
+            st.image(LOGO, width="stretch")
         else:
             st.markdown(_logo_html, unsafe_allow_html=True)
 
@@ -1112,7 +1110,7 @@ padding-left:4px'>🔒 Acesso ao Sistema</div>
 
 # ── Autorefresh: placeholder — chamada real fica após definição das funções ──
 if _AUTOREFRESH_OK:
-    _refresh_count = st_autorefresh(interval=5 * 60 * 1000, key="alert_autorefresh")
+    _refresh_count = st_autorefresh(interval=10 * 60 * 1000, key="alert_autorefresh")
 else:
     st.sidebar.caption("⚠️ Instale streamlit-autorefresh para alertas automáticos.")
     _refresh_count = 0
@@ -3059,6 +3057,7 @@ elif op == "Consulta ABQM":
                 d_nascimento = st.text_input("Nascimento",       value=dados.get("nascimento",""),     key="d_nasc")
                 d_criador    = st.text_input("Criador",          value=dados.get("criador",""),        key="d_cri")
                 d_prop       = st.text_input("Proprietário",     value=dados.get("proprietario",""),   key="d_prop")
+                d_microchip  = st.text_input("Microchip / Chip", value=dados.get("microchip",""),     key="d_chip")
 
             # ── Opção: vincular a existente OU cadastrar novo ──
             st.markdown("---")
@@ -3139,7 +3138,7 @@ padding:16px;margin-top:12px">
                     na_resp     = st.text_input("Responsável", key="na_resp")
                     na_tel      = st.text_input("Telefone", key="na_tel")
                     na_local    = st.text_input("Local / Pasto", key="na_local")
-                    na_microchip= st.text_input("Microchip", key="na_microchip")
+                    na_microchip= st.text_input("Microchip", value=dados.get("microchip", ""), key="na_microchip")
                     na_status   = st.selectbox("Status", ["Ativo", "Vendido", "Falecido", "Emprestado"], key="na_status")
                     na_obs      = st.text_area("Observações", key="na_obs")
 
