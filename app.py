@@ -254,6 +254,18 @@ _SCHEMA = {
         "titulo", "tipo", "data", "hora_inicio", "hora_fim",
         "animal", "funcionario", "descricao", "status", "cor", "obs",
     ],
+    "racao_estoque": [
+        "produto", "categoria", "quantidade_kg", "unidade",
+        "data_compra", "validade", "fornecedor", "preco_total",
+        "preco_kg", "estoque_minimo", "obs",
+    ],
+    "racao_dieta": [
+        "animal", "produto", "quantidade_kg", "turno", "ativo", "obs",
+    ],
+    "racao_fornecimento": [
+        "animal", "produto", "quantidade_kg", "turno", "data",
+        "responsavel", "obs",
+    ],
 }
 
 
@@ -312,6 +324,7 @@ TODAS_PERMISSOES = [
     "Pesagem / Evolução",
     "Controle Sanitário",
     "Farmácia",
+    "Ração",
     "Veterinário / Tratamentos",
     "Reprodução / Embriões",
     "Vendas de Animais",
@@ -354,6 +367,7 @@ PERFIS = {
         "Animais por Tipo",
         "Pesagem / Evolução",
         "Controle Sanitário",
+        "Ração",
         "Importar NF-e / XML",
         "Consulta ABQM",
         "Funcionários",
@@ -1631,6 +1645,7 @@ menu_map_total = {
     "⚖️ Pesagem / Evolução": "Pesagem / Evolução",
     "💉 Controle Sanitário": "Controle Sanitário",
     "💊 Farmácia": "Farmácia",
+    "🌾 Ração": "Ração",
     "📥 Importar NF-e / XML": "Importar NF-e / XML",
     "🔎 Consulta ABQM": "Consulta ABQM",
     "🩺 Veterinário / Tratamentos": "Veterinário / Tratamentos",
@@ -2117,6 +2132,420 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
                 st.success(f"✅ {importados} medicação(ões) importada(s) para a Agenda!")
             except Exception as e:
                 st.error(f"Erro ao sincronizar: {e}")
+
+
+# =========================================================
+# RAÇÃO
+# =========================================================
+
+CATEGORIAS_RACAO = ["Ração", "Suplemento", "Sal Mineral", "Volumoso", "Outro"]
+TURNOS = ["Manhã", "Tarde", "Noite"]
+
+@st.cache_data(ttl=60)
+def _carregar_estoque_racao():
+    try:
+        return pd.read_sql_query(
+            "SELECT * FROM racao_estoque WHERE produto IS NOT NULL ORDER BY produto",
+            get_engine()
+        )
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def _carregar_dieta():
+    try:
+        return pd.read_sql_query(
+            "SELECT * FROM racao_dieta WHERE animal IS NOT NULL AND ativo = 'Sim'",
+            get_engine()
+        )
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=30)
+def _carregar_fornecimento(mes, ano):
+    try:
+        df = pd.read_sql_query(
+            "SELECT * FROM racao_fornecimento WHERE data IS NOT NULL ORDER BY data DESC",
+            get_engine()
+        )
+        if df.empty:
+            return df
+        df["data_dt"] = pd.to_datetime(df["data"], format="%d/%m/%Y", errors="coerce")
+        return df[(df["data_dt"].dt.month == mes) & (df["data_dt"].dt.year == ano)]
+    except Exception:
+        return pd.DataFrame()
+
+
+if op == "Ração":
+    titulo_pagina("🌾 Controle de Ração", "Estoque, dietas e fornecimento por animal")
+
+    aba = st.radio("Opção", [
+        "📊 Dashboard Ração",
+        "🛒 Estoque / Compras",
+        "🍽️ Dietas por Animal",
+        "✅ Registrar Fornecimento",
+        "📋 Histórico",
+    ], horizontal=True)
+
+    animais_r = listar_animais(somente_ativos=True)
+
+    # ── DASHBOARD RAÇÃO ─────────────────────────────────
+    if aba == "📊 Dashboard Ração":
+        titulo_pagina("📊 Dashboard de Ração", "Resumo do estoque e consumo mensal")
+
+        est = _carregar_estoque_racao()
+        dieta = _carregar_dieta()
+        hoje = date.today()
+        forn = _carregar_fornecimento(hoje.month, hoje.year)
+
+        # Métricas
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Produtos em estoque", len(est) if not est.empty else 0)
+        with m2:
+            total_kg = pd.to_numeric(est["quantidade_kg"], errors="coerce").sum() if not est.empty else 0
+            st.metric("Total em estoque (kg)", f"{total_kg:.1f} kg")
+        with m3:
+            animais_dieta = dieta["animal"].nunique() if not dieta.empty else 0
+            st.metric("Animais com dieta", animais_dieta)
+        with m4:
+            consumo_mes = pd.to_numeric(forn["quantidade_kg"], errors="coerce").sum() if not forn.empty else 0
+            st.metric("Consumo este mês (kg)", f"{consumo_mes:.1f} kg")
+
+        st.markdown("---")
+
+        # Alertas de estoque baixo
+        if not est.empty:
+            est["qtd_num"] = pd.to_numeric(est["quantidade_kg"], errors="coerce").fillna(0)
+            est["min_num"] = pd.to_numeric(est["estoque_minimo"], errors="coerce").fillna(0)
+            alertas = est[est["qtd_num"] <= est["min_num"]]
+
+            if not alertas.empty:
+                st.markdown(f"""
+<div style='background:rgba(224,90,90,0.12);border:1px solid rgba(224,90,90,0.3);
+border-left:4px solid #e05a5a;border-radius:10px;padding:14px 18px;margin-bottom:16px'>
+  <div style='font-weight:500;color:#e05a5a;margin-bottom:8px'>
+    ⚠️ {len(alertas)} produto(s) com estoque baixo ou zerado!
+  </div>
+  {''.join(f"<div style='font-size:0.85rem;color:#f0ece3;margin-top:4px'>• {row['produto']} — {row['qtd_num']:.1f} kg restantes (mínimo: {row['min_num']:.1f} kg)</div>"
+            for _, row in alertas.iterrows())}
+</div>
+""", unsafe_allow_html=True)
+            else:
+                st.success("✅ Todos os estoques estão acima do mínimo.")
+
+        # Consumo por produto este mês
+        if not forn.empty:
+            st.markdown("### Consumo por produto este mês")
+            consumo_prod = forn.groupby("produto")["quantidade_kg"].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").sum()
+            ).reset_index()
+            consumo_prod.columns = ["Produto", "Consumo (kg)"]
+            consumo_prod["Consumo (kg)"] = consumo_prod["Consumo (kg)"].round(2)
+            st.dataframe(consumo_prod, use_container_width=True, hide_index=True)
+
+        # Dietas ativas
+        if not dieta.empty:
+            st.markdown("### Dietas ativas por animal")
+            dieta_resumo = dieta.groupby("animal").apply(
+                lambda x: ", ".join(f"{r['produto']} {r['quantidade_kg']}kg/{r['turno']}" for _, r in x.iterrows())
+            ).reset_index()
+            dieta_resumo.columns = ["Animal", "Dieta"]
+            st.dataframe(dieta_resumo, use_container_width=True, hide_index=True)
+
+    # ── ESTOQUE / COMPRAS ────────────────────────────────
+    elif aba == "🛒 Estoque / Compras":
+        titulo_pagina("🛒 Estoque de Ração", "Registre compras e gerencie o estoque")
+
+        with st.expander("➕ Registrar nova compra", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                r_produto   = st.text_input("Nome do produto *", placeholder="Ex: Ração Equilíbrio Senior")
+                r_categoria = st.selectbox("Categoria", CATEGORIAS_RACAO)
+                r_qtd       = st.number_input("Quantidade comprada (kg) *", min_value=0.0, step=0.5)
+                r_unidade   = st.selectbox("Unidade de compra", ["kg", "saco 30kg", "saco 40kg", "saco 50kg", "fardo"])
+            with col2:
+                r_data      = st.date_input("Data da compra *", format="DD/MM/YYYY")
+                r_validade  = st.date_input("Validade", format="DD/MM/YYYY", value=None)
+                r_fornecedor= st.text_input("Fornecedor")
+                r_preco     = st.number_input("Preço total (R$)", min_value=0.0, step=0.01)
+                r_estmin    = st.number_input("Estoque mínimo (kg)", min_value=0.0, step=0.5, value=50.0)
+                r_obs       = st.text_input("Observações")
+
+            if st.button("💾 Registrar compra", use_container_width=True):
+                if not r_produto or r_qtd <= 0:
+                    st.error("Informe o produto e a quantidade.")
+                else:
+                    preco_kg = round(r_preco / r_qtd, 4) if r_qtd > 0 else 0
+                    # Verifica se produto já existe e soma estoque
+                    existe = pd.read_sql_query(
+                        "SELECT id, quantidade_kg FROM racao_estoque WHERE produto = %s",
+                        get_engine(), params=(r_produto,)
+                    )
+                    if not existe.empty:
+                        qtd_atual = float(existe.iloc[0]["quantidade_kg"] or 0)
+                        c.execute(
+                            "UPDATE racao_estoque SET quantidade_kg = %s, data_compra = %s, preco_total = %s, preco_kg = %s WHERE produto = %s",
+                            (str(qtd_atual + r_qtd), br_data(r_data), str(r_preco), str(preco_kg), r_produto)
+                        )
+                        msg = f"✅ Estoque de '{r_produto}' atualizado! Total: {qtd_atual + r_qtd:.1f} kg"
+                    else:
+                        c.execute("""
+                            INSERT INTO racao_estoque
+                            (produto, categoria, quantidade_kg, unidade, data_compra,
+                             validade, fornecedor, preco_total, preco_kg, estoque_minimo, obs)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        """, (
+                            r_produto, r_categoria, str(r_qtd), r_unidade,
+                            br_data(r_data),
+                            br_data(r_validade) if r_validade else "",
+                            r_fornecedor, str(r_preco), str(preco_kg),
+                            str(r_estmin), r_obs
+                        ))
+                        msg = f"✅ Produto '{r_produto}' cadastrado com {r_qtd:.1f} kg!"
+                    conn.commit()
+                    _carregar_estoque_racao.clear()
+                    st.success(msg)
+                    st.rerun()
+
+        # Lista estoque atual
+        est = _carregar_estoque_racao()
+        if not est.empty:
+            st.markdown("### Estoque atual")
+            est["qtd_num"] = pd.to_numeric(est["quantidade_kg"], errors="coerce").fillna(0)
+            est["min_num"] = pd.to_numeric(est["estoque_minimo"], errors="coerce").fillna(0)
+            est["Status"] = est.apply(
+                lambda r: "🔴 Crítico" if r["qtd_num"] == 0
+                else ("🟡 Baixo" if r["qtd_num"] <= r["min_num"] else "🟢 OK"), axis=1
+            )
+            cols_show = ["produto", "categoria", "quantidade_kg", "unidade", "estoque_minimo", "preco_kg", "data_compra", "Status"]
+            cols_show = [c0 for c0 in cols_show if c0 in est.columns]
+            st.dataframe(est[cols_show].rename(columns={
+                "produto": "Produto", "categoria": "Categoria",
+                "quantidade_kg": "Estoque (kg)", "unidade": "Unidade",
+                "estoque_minimo": "Mínimo (kg)", "preco_kg": "R$/kg",
+                "data_compra": "Última compra"
+            }), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum produto cadastrado. Registre sua primeira compra acima.")
+
+    # ── DIETAS POR ANIMAL ────────────────────────────────
+    elif aba == "🍽️ Dietas por Animal":
+        titulo_pagina("🍽️ Dietas por Animal", "Configure a ração fixa diária de cada animal")
+
+        if animais_r.empty:
+            st.warning("Nenhum animal ativo cadastrado.")
+        else:
+            est = _carregar_estoque_racao()
+            produtos_disponiveis = est["produto"].tolist() if not est.empty else []
+
+            if not produtos_disponiveis:
+                st.warning("Cadastre produtos no estoque primeiro.")
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    animal_d = st.selectbox("Animal *", animais_r["nome"].tolist(), key="dieta_animal")
+                    produto_d = st.selectbox("Produto *", produtos_disponiveis, key="dieta_prod")
+                    qtd_d = st.number_input("Quantidade por fornecimento (kg) *", min_value=0.1, step=0.1, value=2.0)
+                with col2:
+                    turno_d = st.selectbox("Turno", TURNOS, key="dieta_turno")
+                    obs_d = st.text_input("Observação", key="dieta_obs")
+
+                if st.button("💾 Salvar dieta", use_container_width=True):
+                    # Verifica se já tem dieta para esse animal+produto+turno
+                    existe = pd.read_sql_query(
+                        "SELECT id FROM racao_dieta WHERE animal = %s AND produto = %s AND turno = %s",
+                        get_engine(), params=(animal_d, produto_d, turno_d)
+                    )
+                    if not existe.empty:
+                        c.execute(
+                            "UPDATE racao_dieta SET quantidade_kg = %s, ativo = 'Sim', obs = %s WHERE id = %s",
+                            (str(qtd_d), obs_d, str(existe.iloc[0]["id"]))
+                        )
+                    else:
+                        c.execute(
+                            "INSERT INTO racao_dieta (animal, produto, quantidade_kg, turno, ativo, obs) VALUES (%s,%s,%s,%s,%s,%s)",
+                            (animal_d, produto_d, str(qtd_d), turno_d, "Sim", obs_d)
+                        )
+                    conn.commit()
+                    _carregar_dieta.clear()
+                    st.success(f"✅ Dieta de {animal_d} salva: {qtd_d}kg de {produto_d} no {turno_d}!")
+                    st.rerun()
+
+            # Lista dietas atuais
+            dieta = _carregar_dieta()
+            if not dieta.empty:
+                st.markdown("---")
+                st.markdown("### Dietas ativas")
+                for animal_nome in dieta["animal"].unique():
+                    df_an = dieta[dieta["animal"] == animal_nome]
+                    total_dia = pd.to_numeric(df_an["quantidade_kg"], errors="coerce").sum() * len(df_an["turno"].unique())
+                    st.markdown(f"""
+<div style='background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--gold);
+border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px'>
+  <div style='font-weight:500;color:var(--text);margin-bottom:6px'>🐎 {animal_nome} — {total_dia:.1f} kg/dia total</div>
+  {''.join(f"<div style='font-size:0.82rem;color:var(--muted);margin-top:2px'>• {r['turno']}: {r['produto']} — {r['quantidade_kg']} kg</div>" for _, r in df_an.iterrows())}
+</div>
+""", unsafe_allow_html=True)
+
+                    col_btn1, col_btn2 = st.columns([4, 1])
+                    with col_btn2:
+                        if st.button("❌ Desativar todas", key=f"desativ_{animal_nome}"):
+                            c.execute("UPDATE racao_dieta SET ativo = 'Não' WHERE animal = %s", (animal_nome,))
+                            conn.commit()
+                            _carregar_dieta.clear()
+                            st.rerun()
+            else:
+                st.info("Nenhuma dieta cadastrada ainda.")
+
+    # ── REGISTRAR FORNECIMENTO ───────────────────────────
+    elif aba == "✅ Registrar Fornecimento":
+        titulo_pagina("✅ Registrar Fornecimento", "Registre o que foi fornecido hoje")
+
+        dieta = _carregar_dieta()
+        est = _carregar_estoque_racao()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            data_forn = st.date_input("Data *", value=date.today(), format="DD/MM/YYYY")
+            turno_forn = st.selectbox("Turno *", TURNOS)
+        with col2:
+            responsavel_forn = st.text_input("Responsável")
+
+        # Botão para pré-preencher com dieta do dia
+        if not dieta.empty:
+            dieta_turno = dieta[dieta["turno"] == turno_forn]
+            if not dieta_turno.empty and st.button("⚡ Pré-preencher com dieta do turno", use_container_width=True):
+                st.session_state["prefill_forn"] = dieta_turno.to_dict("records")
+
+        st.markdown("---")
+        st.markdown("### Animais e quantidades")
+
+        # Monta lista de fornecimentos
+        if animais_r.empty:
+            st.warning("Nenhum animal ativo.")
+        else:
+            produtos_est = est["produto"].tolist() if not est.empty else []
+            fornecimentos = []
+            prefill = st.session_state.get("prefill_forn", [])
+
+            for _, animal in animais_r.iterrows():
+                nome_an = animal["nome"]
+                # Verifica se tem dieta para esse animal neste turno
+                dieta_an = dieta[(dieta["animal"] == nome_an) & (dieta["turno"] == turno_forn)] if not dieta.empty else pd.DataFrame()
+
+                with st.expander(f"🐎 {nome_an}", expanded=not dieta_an.empty):
+                    if not dieta_an.empty:
+                        for _, d in dieta_an.iterrows():
+                            col_a, col_b, col_c = st.columns([2, 1, 1])
+                            with col_a:
+                                prod_sel = st.selectbox(
+                                    "Produto", produtos_est,
+                                    index=produtos_est.index(d["produto"]) if d["produto"] in produtos_est else 0,
+                                    key=f"fp_{nome_an}_{d['turno']}_{d['produto']}"
+                                )
+                            with col_b:
+                                qtd_sel = st.number_input(
+                                    "kg", min_value=0.0, step=0.1,
+                                    value=float(d["quantidade_kg"] or 0),
+                                    key=f"fq_{nome_an}_{d['turno']}_{d['produto']}"
+                                )
+                            with col_c:
+                                fornecer = st.checkbox("Fornecer", value=True, key=f"fc_{nome_an}_{d['turno']}_{d['produto']}")
+
+                            if fornecer and qtd_sel > 0:
+                                fornecimentos.append((nome_an, prod_sel, qtd_sel))
+                    else:
+                        # Animal sem dieta — permite adicionar manualmente
+                        col_a, col_b = st.columns([2, 1])
+                        with col_a:
+                            prod_man = st.selectbox("Produto", ["(nenhum)"] + produtos_est, key=f"pm_{nome_an}")
+                        with col_b:
+                            qtd_man = st.number_input("kg", min_value=0.0, step=0.1, key=f"qm_{nome_an}")
+                        if prod_man != "(nenhum)" and qtd_man > 0:
+                            fornecimentos.append((nome_an, prod_man, qtd_man))
+
+            if st.button("💾 Confirmar fornecimento", use_container_width=True):
+                if not fornecimentos:
+                    st.error("Nenhum item para registrar.")
+                else:
+                    erros_estoque = []
+                    for nome_an, prod, qtd in fornecimentos:
+                        # Desconta do estoque
+                        est_prod = pd.read_sql_query(
+                            "SELECT id, quantidade_kg FROM racao_estoque WHERE produto = %s",
+                            get_engine(), params=(prod,)
+                        )
+                        if not est_prod.empty:
+                            qtd_atual = float(est_prod.iloc[0]["quantidade_kg"] or 0)
+                            nova_qtd = max(0, qtd_atual - qtd)
+                            c.execute(
+                                "UPDATE racao_estoque SET quantidade_kg = %s WHERE produto = %s",
+                                (str(nova_qtd), prod)
+                            )
+                            if qtd > qtd_atual:
+                                erros_estoque.append(f"{prod}: solicitado {qtd}kg, disponível {qtd_atual}kg")
+
+                        # Registra fornecimento
+                        c.execute("""
+                            INSERT INTO racao_fornecimento
+                            (animal, produto, quantidade_kg, turno, data, responsavel, obs)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s)
+                        """, (nome_an, prod, str(qtd), turno_forn, br_data(data_forn), responsavel_forn, ""))
+
+                    conn.commit()
+                    _carregar_estoque_racao.clear()
+                    _carregar_fornecimento.clear()
+                    st.session_state.pop("prefill_forn", None)
+
+                    if erros_estoque:
+                        st.warning("⚠️ Fornecimento registrado, mas estoque insuficiente para: " + "; ".join(erros_estoque))
+                    else:
+                        st.success(f"✅ {len(fornecimentos)} fornecimento(s) registrado(s) e estoque atualizado!")
+                    st.rerun()
+
+    # ── HISTÓRICO ────────────────────────────────────────
+    elif aba == "📋 Histórico":
+        titulo_pagina("📋 Histórico de Fornecimento", "Consulte o histórico por período")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            mes_h = st.selectbox("Mês", list(range(1, 13)), index=date.today().month - 1,
+                                  format_func=lambda m: ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"][m-1])
+        with col2:
+            ano_h = st.selectbox("Ano", list(range(2024, date.today().year + 2)), index=1)
+        with col3:
+            filtro_animal_h = st.text_input("Filtrar animal")
+
+        df_hist = _carregar_fornecimento(mes_h, ano_h)
+
+        if not df_hist.empty:
+            if filtro_animal_h:
+                df_hist = df_hist[df_hist["animal"].str.contains(filtro_animal_h, case=False, na=False)]
+
+            # Resumo
+            total_kg_h = pd.to_numeric(df_hist["quantidade_kg"], errors="coerce").sum()
+            m1, m2, m3 = st.columns(3)
+            with m1: st.metric("Registros", len(df_hist))
+            with m2: st.metric("Total fornecido (kg)", f"{total_kg_h:.1f}")
+            with m3: st.metric("Animais atendidos", df_hist["animal"].nunique())
+
+            st.dataframe(
+                df_hist[["data", "turno", "animal", "produto", "quantidade_kg", "responsavel"]].rename(columns={
+                    "data": "Data", "turno": "Turno", "animal": "Animal",
+                    "produto": "Produto", "quantidade_kg": "kg", "responsavel": "Responsável"
+                }),
+                use_container_width=True, hide_index=True
+            )
+
+            st.download_button(
+                "📥 Baixar Excel",
+                data=gerar_excel(df_hist),
+                file_name=f"racao_{mes_h:02d}_{ano_h}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("Nenhum fornecimento registrado neste período.")
 
 
 # =========================================================
