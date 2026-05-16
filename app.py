@@ -452,40 +452,40 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500&display=swap');
 
 :root {
-    /* Cores base — novo tema claro */
-    --bg:        #f2efe8;
-    --surface:   #ffffff;
-    --surface2:  #f8f6f1;
-    --surface3:  #ede9e0;
+    /* Cores base — tema verde escuro + creme */
+    --bg:        #1a3a2a;
+    --surface:   #1e4230;
+    --surface2:  #17331f;
+    --surface3:  #142e1c;
 
-    /* Sidebar verde escuro */
-    --sidebar:   #1a3a2a;
-    --sidebar2:  #142e20;
-    --sidebar3:  #0f2218;
+    /* Sidebar verde mais escuro */
+    --sidebar:   #142e1c;
+    --sidebar2:  #0f2218;
+    --sidebar3:  #0a1812;
 
     /* Dourado — identidade do haras */
     --gold:      #c9a84c;
     --gold-l:    #e8ca7a;
-    --gold-d:    #8a6d20;
-    --gold-bg:   rgba(201,168,76,0.1);
-    --gold-line: rgba(201,168,76,0.25);
+    --gold-d:    #f0d070;
+    --gold-bg:   rgba(201,168,76,0.12);
+    --gold-line: rgba(201,168,76,0.3);
 
     /* Verde haras */
-    --green-brand: #1a7a4a;
-    --green-light: #e1f5ee;
-    --green-line:  rgba(26,122,74,0.2);
+    --green-brand: #4ab87a;
+    --green-light: rgba(74,184,122,0.12);
+    --green-line:  rgba(74,184,122,0.25);
 
     /* Semânticas */
-    --red:    #c0392b;
-    --green:  #1a7a4a;
-    --yellow: #c57d0a;
-    --blue:   #1a5fa0;
+    --red:    #e05a5a;
+    --green:  #4ab87a;
+    --yellow: #e8b84b;
+    --blue:   #4a8fcf;
 
-    /* Texto */
-    --text:   #1a2a1e;
-    --muted:  #5a7a6a;
-    --hint:   #9aaa9e;
-    --line:   rgba(0,0,0,0.08);
+    /* Texto — claro sobre fundo escuro */
+    --text:   #f0ece3;
+    --muted:  #9ab8a8;
+    --hint:   #5a7a6a;
+    --line:   rgba(255,255,255,0.08);
 }
 
 /* ── Fontes base ── */
@@ -495,6 +495,7 @@ st.markdown("""
 .stApp {
     background: var(--bg) !important;
     color: var(--text) !important;
+    color-scheme: dark;
 }
 .main .block-container {
     padding-top: 1.5rem !important;
@@ -571,6 +572,7 @@ div[data-testid="stMetric"] {
     border-radius: 12px;
     padding: 16px 20px;
     border-top: 3px solid var(--gold);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 div[data-testid="stMetricLabel"] {
     color: var(--muted) !important;
@@ -610,7 +612,7 @@ div[data-testid="column"] .stButton button {
     min-height: 120px;
     font-size: 0.95rem;
     border-radius: 12px;
-    border: 0.5px solid var(--line) !important;
+    border: 0.5px solid rgba(255,255,255,0.12) !important;
     background: var(--surface) !important;
     color: var(--text) !important;
     font-weight: 500 !important;
@@ -629,9 +631,9 @@ div[data-testid="column"] .stButton button:hover {
 
 /* ── Inputs ── */
 input, textarea {
-    background-color: var(--surface) !important;
+    background-color: var(--surface2) !important;
     color: var(--text) !important;
-    border: 0.5px solid rgba(0,0,0,0.15) !important;
+    border: 0.5px solid rgba(255,255,255,0.12) !important;
     border-radius: 8px !important;
     font-size: 0.9rem !important;
 }
@@ -641,9 +643,9 @@ input:focus, textarea:focus {
     outline: none !important;
 }
 div[data-baseweb="select"] > div {
-    background-color: var(--surface) !important;
+    background-color: var(--surface2) !important;
     border-radius: 8px !important;
-    border: 0.5px solid rgba(0,0,0,0.15) !important;
+    border: 0.5px solid rgba(255,255,255,0.12) !important;
     color: var(--text) !important;
 }
 div[data-baseweb="select"] > div:focus-within {
@@ -659,7 +661,7 @@ div[data-baseweb="select"] > div:focus-within {
 /* ── Radio buttons ── */
 div[role="radiogroup"] label {
     background: var(--surface) !important;
-    border: 0.5px solid rgba(0,0,0,0.12) !important;
+    border: 0.5px solid rgba(255,255,255,0.12) !important;
     border-radius: 8px !important;
     padding: 8px 14px !important;
     color: var(--text) !important;
@@ -667,8 +669,8 @@ div[role="radiogroup"] label {
     font-size: 0.88rem !important;
 }
 div[role="radiogroup"] label:hover {
-    border-color: var(--green-brand) !important;
-    background: var(--green-light) !important;
+    border-color: var(--gold) !important;
+    background: var(--gold-bg) !important;
 }
 
 /* ── DataFrames ── */
@@ -677,6 +679,7 @@ div[role="radiogroup"] label:hover {
     overflow: hidden;
     border: 0.5px solid var(--line);
     background: var(--surface);
+    color: var(--text);
 }
 
 /* ── Cards ── */
@@ -687,6 +690,7 @@ div[role="radiogroup"] label:hover {
     border-radius: 10px;
     padding: 18px;
     transition: box-shadow .2s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 .card:hover {
     box-shadow: 0 4px 16px rgba(0,0,0,0.08);
@@ -713,7 +717,7 @@ div[role="radiogroup"] label:hover {
 /* ── Grid de módulos (dashboard) ── */
 .app-grid-card {
     background: var(--surface);
-    border: 0.5px solid var(--line);
+    border: 0.5px solid rgba(255,255,255,0.1);
     border-radius: 12px;
     padding: 20px 14px;
     min-height: 120px;
@@ -723,8 +727,8 @@ div[role="radiogroup"] label:hover {
     transition: all .2s;
 }
 .app-grid-card:hover {
-    border-color: var(--sidebar);
-    background: var(--sidebar);
+    border-color: var(--gold);
+    background: var(--surface3);
     transform: translateY(-3px);
     box-shadow: 0 8px 20px rgba(26,58,42,0.15);
 }
@@ -811,7 +815,7 @@ div[role="radiogroup"] label:hover {
 div[data-testid="stAlert"] { border-radius: 8px !important; border-width: 0.5px !important; }
 
 /* ── Expander ── */
-details { background: var(--surface); border-radius: 8px; border: 0.5px solid var(--line) !important; }
+details { background: var(--surface); border-radius: 8px; border: 0.5px solid rgba(255,255,255,0.1) !important; }
 details summary { color: var(--text) !important; font-weight: 500 !important; }
 
 /* ── Scrollbar ── */
@@ -1024,26 +1028,46 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
 
 if not st.session_state.logado:
-    st.markdown("<br><br>", unsafe_allow_html=True)
 
-    col_login1, col_login2, col_login3 = st.columns([1, 1.2, 1])
+    # Fundo verde escuro cobrindo toda a tela
+    st.markdown("""
+<style>
+.stApp { background: #1a3a2a !important; }
+.main .block-container { padding: 0 !important; max-width: 100% !important; }
+[data-testid="stSidebar"] { display: none !important; }
+header { display: none !important; }
+</style>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#1a3a2a;position:fixed;top:0;left:0;right:0;bottom:0;z-index:999">
+  <div style="width:100%;max-width:420px;padding:24px;text-align:center">
+</div>
+</div>
+""", unsafe_allow_html=True)
 
-    with col_login2:
+    col1, col2, col3 = st.columns([1, 1.4, 1])
+    with col2:
+        # Logo
         if os.path.exists(LOGO):
             st.image(LOGO, use_container_width=True)
-        st.markdown("""
-<div style='text-align:center;margin:-8px 0 20px'>
-  <span style='font-size:0.75rem;color:#4a9e6b;font-weight:700;letter-spacing:0.12em;text-transform:uppercase'>Sistema de Gestão do Haras</span>
+        else:
+            st.markdown("""
+<div style='text-align:center;padding:20px 0 8px'>
+  <div style='font-family:"Playfair Display",serif;font-size:2rem;color:#c9a84c;font-weight:700'>RRV</div>
 </div>
-<div style='background:#0d1b2a;border:1px solid rgba(201,168,76,0.22);border-radius:18px;padding:20px 16px;margin-bottom:4px'>
-  <div style='font-size:1rem;font-weight:700;color:#f0f4f8;margin-bottom:16px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
+
+        st.markdown("""
+<div style='text-align:center;margin-bottom:28px'>
+  <div style='font-size:0.72rem;color:rgba(201,168,76,0.8);font-weight:500;letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</div>
+</div>
+<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.2);border-radius:16px;padding:24px 20px;backdrop-filter:blur(10px)'>
+  <div style='font-size:1rem;font-weight:500;color:#ffffff;margin-bottom:20px;text-align:left'>🔒 Acesso ao Sistema</div>
+""", unsafe_allow_html=True)
+
         nome_login = st.text_input("Usuário", placeholder="Digite seu usuário")
         senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
 
         if st.button("Entrar", use_container_width=True):
             usuario = carregar_usuario(nome_login)
-
             if usuario and usuario["senha_hash"] == hash_senha(senha_login):
                 st.session_state.logado = True
                 st.session_state.usuario = usuario
@@ -1053,7 +1077,6 @@ if not st.session_state.logado:
                 st.error("Usuário ou senha inválidos.")
 
         st.markdown('</div>', unsafe_allow_html=True)
-        st.info("Acesso inicial: usuário **admin** | senha **1234**. Altere depois em Admin / Usuários.")
 
     st.stop()
 
@@ -2106,13 +2129,13 @@ if op == "Dashboard":
 <div style='display:flex;align-items:center;gap:14px;margin-bottom:20px'>
   <div style='width:4px;height:48px;border-radius:99px;background:linear-gradient(180deg,#c9a84c,#1a7a4a);flex-shrink:0'></div>
   <div>
-    <div style='font-family:"Playfair Display",serif;font-size:1.5rem;font-weight:500;color:#1a2a1e;margin:0;line-height:1.1'>Rancho Recanto Verde</div>
-    <div style='font-size:0.82rem;color:#5a7a6a;font-weight:300;margin-top:2px'>Gestão completa do haras na palma da mão</div>
+    <div style='font-family:"Playfair Display",serif;font-size:1.5rem;font-weight:500;color:#f0ece3;margin:0;line-height:1.1'>Rancho Recanto Verde</div>
+    <div style='font-size:0.82rem;color:#9ab8a8;font-weight:300;margin-top:2px'>Gestão completa do haras na palma da mão</div>
   </div>
 </div>
 <div style='height:2px;background:linear-gradient(90deg,#c9a84c,rgba(26,122,74,0.3),transparent);margin-bottom:20px;border-radius:99px'></div>
 """, unsafe_allow_html=True)
-    st.markdown('<div style="font-size:0.68rem;color:#5a7a6a;text-transform:uppercase;letter-spacing:0.14em;font-weight:500;margin-bottom:10px">⚡ Acesso rápido</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.68rem;color:#9ab8a8;text-transform:uppercase;letter-spacing:0.14em;font-weight:500;margin-bottom:10px">⚡ Acesso rápido</div>', unsafe_allow_html=True)
 
     linha1 = st.columns(4)
     atalhos = [
@@ -2145,7 +2168,7 @@ if op == "Dashboard":
     st.markdown("""
 <div style='margin:22px 0 16px'>
   <div style='height:1px;background:linear-gradient(90deg,#c9a84c,rgba(26,122,74,0.3),transparent);margin-bottom:16px;border-radius:99px'></div>
-  <div style='font-size:0.68rem;color:#5a7a6a;text-transform:uppercase;letter-spacing:0.14em;font-weight:500'>
+  <div style='font-size:0.68rem;color:#9ab8a8;text-transform:uppercase;letter-spacing:0.14em;font-weight:500'>
     📊 Resumo do haras
   </div>
 </div>
