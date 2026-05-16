@@ -1084,6 +1084,8 @@ div[data-testid="stForm"] button:hover {
         else:
             st.markdown(_logo_html, unsafe_allow_html=True)
 
+        st.markdown("<div style='margin-top:-55px'></div>", unsafe_allow_html=True)
+
         st.markdown("""
 <div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:0 0 4px;
 padding-left:4px'>🔒 Acesso ao Sistema</div>
