@@ -1035,45 +1035,67 @@ if not st.session_state.logado:
 
     st.markdown("""
 <style>
-.stApp { background: #1a3a2a !important; }
-[data-testid="stSidebar"] { display: none !important; }
-header[data-testid="stHeader"] { background: transparent !important; }
-#MainMenu, footer { visibility: hidden !important; }
-.main .block-container {
+.stApp, .stApp > div, .main, .main > div, .block-container {
+    background: #1a3a2a !important;
     padding: 0 !important;
+    margin: 0 !important;
     max-width: 100% !important;
-    height: 100vh !important;
-    overflow: hidden !important;
 }
-section.main > div:first-child {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-    height: 100vh !important;
-    overflow: hidden !important;
+[data-testid="stSidebar"], header, #MainMenu, footer { display: none !important; }
+html, body { background: #1a3a2a !important; }
+
+/* Centra o form no meio da tela */
+div[data-testid="stForm"] {
+    background: rgba(255,255,255,0.07) !important;
+    border: 1px solid rgba(201,168,76,0.25) !important;
+    border-radius: 16px !important;
+    padding: 8px 20px 16px !important;
 }
-/* Remove barra de rolagem global */
-html, body { overflow: hidden !important; height: 100% !important; }
+div[data-testid="stForm"] label { color: rgba(255,255,255,0.7) !important; }
+div[data-testid="stForm"] input {
+    background: rgba(255,255,255,0.06) !important;
+    color: #ffffff !important;
+    border-color: rgba(255,255,255,0.15) !important;
+}
+div[data-testid="stForm"] button[kind="primaryFormSubmit"],
+div[data-testid="stForm"] button {
+    background: #c9a84c !important;
+    color: #1a3a2a !important;
+    font-weight: 600 !important;
+    border: none !important;
+    margin-top: 6px !important;
+}
+div[data-testid="stForm"] button:hover {
+    background: #e8ca7a !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 1.6, 1])
+    # Espaço topo calculado para centralizar (logo ~200px + subtitulo + form ~220px = ~500px total, centralizando com padding)
+    _logo_html = f"<img src='https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png' style='width:100%;max-width:380px;display:block;margin:0 auto 6px' />" if not os.path.exists(LOGO) else ""
+
+    col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
+        # Padding top para centralizar verticalmente
+        st.markdown("<div style='padding-top:8vh'></div>", unsafe_allow_html=True)
+
+        # Logo
         if os.path.exists(LOGO):
             st.image(LOGO, width="stretch")
         else:
-            st.markdown("<div style='text-align:center'><span style='font-size:3rem;color:#c9a84c'>🐎</span></div>", unsafe_allow_html=True)
+            st.markdown(_logo_html, unsafe_allow_html=True)
 
+        # Subtítulo
         st.markdown("""
-<div style='text-align:center;margin:-4px 0 18px'>
-  <div style='font-size:0.7rem;color:rgba(201,168,76,0.85);font-weight:500;letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</div>
+<div style='text-align:center;margin:2px 0 20px'>
+  <span style='font-size:0.7rem;color:rgba(201,168,76,0.85);font-weight:500;
+  letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</span>
 </div>
-<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.25);border-radius:16px;padding:20px 20px 8px;'>
-  <div style='font-size:0.95rem;font-weight:500;color:#ffffff;margin-bottom:14px'>🔒 Acesso ao Sistema</div>
+<div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin-bottom:8px;
+padding-left:4px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
-        # Formulário com suporte a Enter
+        # Formulário — Enter funciona nativamente
         with st.form("form_login", clear_on_submit=False):
             nome_login  = st.text_input("Usuário", placeholder="Digite seu usuário")
             senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
@@ -1088,8 +1110,6 @@ html, body { overflow: hidden !important; height: 100% !important; }
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
 
     st.stop()
 
