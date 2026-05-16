@@ -88,7 +88,7 @@ def _pdf_str(texto):
 
 st.set_page_config(
     page_title="Rancho Recanto Verde",
-    page_icon="🐎",
+    page_icon="https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png",
     layout="wide",
     initial_sidebar_state="expanded"
 )
