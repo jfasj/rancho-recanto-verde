@@ -137,12 +137,21 @@ def get_engine():
 
 
 def reconectar_se_necessario():
-    """Reconecta ao banco se a conexão cair (comum com session pooler)."""
+    """Reconecta ao banco se a conexão cair ou tiver transação com falha."""
     global conn, c
     try:
+        # Testa se a conexão está OK
         conn.cursor().execute("SELECT 1")
+        conn.rollback()  # Limpa qualquer transação pendente com falha
     except Exception:
-        st.cache_resource.clear()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
         conn = get_connection()
         c = conn.cursor()
 
@@ -434,17 +443,25 @@ def criar_admin_padrao():
 
 
 def atualizar_admin_permissoes():
-    c.execute("""
-        UPDATE usuarios
-        SET permissoes = %s, perfil = %s, ativo = %s
-        WHERE nome = %s
-    """, (
-        "|".join(TODAS_PERMISSOES),
-        "Administrador",
-        "Sim",
-        "admin"
-    ))
-    conn.commit()
+    try:
+        # Garante que não há transação com falha pendente
+        conn.rollback()
+        c.execute("""
+            UPDATE usuarios
+            SET permissoes = %s, perfil = %s, ativo = %s
+            WHERE nome = %s
+        """, (
+            "|".join(TODAS_PERMISSOES),
+            "Administrador",
+            "Sim",
+            "admin"
+        ))
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 @st.cache_data(ttl=300)
@@ -473,6 +490,7 @@ def usuario_tem_permissao(pagina):
 
 criar_admin_padrao()
 if "admin_perms_atualizadas" not in st.session_state:
+    reconectar_se_necessario()
     atualizar_admin_permissoes()
     st.session_state.admin_perms_atualizadas = True
 
