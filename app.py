@@ -1029,46 +1029,51 @@ if "logado" not in st.session_state:
 
 if not st.session_state.logado:
 
-    # CSS só para a tela de login
     st.markdown("""
 <style>
-.stApp { background: #1a3a2a !important; }
+.stApp { background: #1a3a2a !important; overflow: hidden !important; }
 [data-testid="stSidebar"] { display: none !important; }
-header[data-testid="stHeader"] { display: none !important; }
-.main .block-container { padding-top: 0 !important; }
+header[data-testid="stHeader"] { background: transparent !important; }
+#MainMenu, footer { visibility: hidden !important; }
+.main .block-container {
+    padding: 0 !important;
+    max-width: 100% !important;
+}
+/* Centraliza verticalmente sem scroll */
+section.main > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-    # Espaço para centralizar verticalmente
-    st.markdown("<div style='height:6vh'></div>", unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 1.4, 1])
+    col1, col2, col3 = st.columns([1, 1.6, 1])
     with col2:
         if os.path.exists(LOGO):
             st.image(LOGO, width="stretch")
         else:
-            st.markdown("""
-<div style='text-align:center;padding:20px 0 8px'>
-  <div style='font-family:"Playfair Display",serif;font-size:2.5rem;color:#c9a84c;font-weight:700'>RRV</div>
-</div>
-""", unsafe_allow_html=True)
+            st.markdown("<div style='text-align:center'><span style='font-size:3rem;color:#c9a84c'>🐎</span></div>", unsafe_allow_html=True)
 
         st.markdown("""
-<div style='text-align:center;margin-bottom:24px'>
-  <div style='font-size:0.72rem;color:rgba(201,168,76,0.8);font-weight:500;letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</div>
+<div style='text-align:center;margin:-4px 0 18px'>
+  <div style='font-size:0.7rem;color:rgba(201,168,76,0.85);font-weight:500;letter-spacing:0.18em;text-transform:uppercase'>Sistema de Gestão do Haras</div>
 </div>
-<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.25);border-radius:16px;padding:24px 20px 8px;'>
-  <div style='font-size:1rem;font-weight:500;color:#ffffff;margin-bottom:18px'>🔒 Acesso ao Sistema</div>
+<div style='background:rgba(255,255,255,0.07);border:1px solid rgba(201,168,76,0.25);border-radius:16px;padding:20px 20px 8px;'>
+  <div style='font-size:0.95rem;font-weight:500;color:#ffffff;margin-bottom:14px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
-        nome_login = st.text_input("Usuário", placeholder="Digite seu usuário")
+        nome_login  = st.text_input("Usuário", placeholder="Digite seu usuário")
         senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
 
         if st.button("Entrar", use_container_width=True):
             usuario = carregar_usuario(nome_login)
             if usuario and usuario["senha_hash"] == hash_senha(senha_login):
-                st.session_state.logado = True
-                st.session_state.usuario = usuario
+                st.session_state.logado       = True
+                st.session_state.usuario      = usuario
                 st.session_state.pagina_atual = "Dashboard"
                 st.rerun()
             else:
