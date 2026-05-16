@@ -3893,8 +3893,15 @@ padding:12px 16px;margin-top:12px;display:flex;align-items:center;gap:12px">
 elif op == "Importar NF-e / XML":
     titulo_pagina("📥 Importar NF-e / XML", "Importe produtos da NF-e para Farmácia ou Ração")
 
+    st.markdown("""
+<style>
+[data-testid="stFileUploaderDropzoneInstructions"] span:first-child { display: none !important; }
+[data-testid="stFileUploadDropzone"] button { min-width: 100px !important; }
+</style>
+""", unsafe_allow_html=True)
+
     st.markdown("**📎 Selecione o arquivo XML da NF-e**")
-    arquivo_xml = st.file_uploader("XML da NF-e", type=["xml"], label_visibility="collapsed")
+    arquivo_xml = st.file_uploader("XML", type=["xml"], label_visibility="collapsed")
     st.markdown("---")
 
     if arquivo_xml is not None:
