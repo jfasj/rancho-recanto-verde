@@ -1077,14 +1077,14 @@ div[data-testid="stForm"] button:hover {
 
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        st.markdown("<div style='padding-top:1vh'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='padding-top:0'></div>", unsafe_allow_html=True)
 
         if os.path.exists(LOGO):
             st.image(LOGO, width="stretch")
         else:
             st.markdown(_logo_html, unsafe_allow_html=True)
 
-        st.markdown("<div style='margin-top:-110px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top:-165px'></div>", unsafe_allow_html=True)
 
         st.markdown("""
 <div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:0 0 4px;
