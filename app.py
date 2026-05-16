@@ -1035,23 +1035,26 @@ if not st.session_state.logado:
 
     st.markdown("""
 <style>
-.stApp { background: #1a3a2a !important; overflow: hidden !important; }
+.stApp { background: #1a3a2a !important; }
 [data-testid="stSidebar"] { display: none !important; }
 header[data-testid="stHeader"] { background: transparent !important; }
 #MainMenu, footer { visibility: hidden !important; }
 .main .block-container {
     padding: 0 !important;
     max-width: 100% !important;
+    height: 100vh !important;
+    overflow: hidden !important;
 }
-/* Centraliza verticalmente sem scroll */
-section.main > div {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 0 !important;
+section.main > div:first-child {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 100vh !important;
+    overflow: hidden !important;
 }
+/* Remove barra de rolagem global */
+html, body { overflow: hidden !important; height: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1070,10 +1073,13 @@ section.main > div {
   <div style='font-size:0.95rem;font-weight:500;color:#ffffff;margin-bottom:14px'>🔒 Acesso ao Sistema</div>
 """, unsafe_allow_html=True)
 
-        nome_login  = st.text_input("Usuário", placeholder="Digite seu usuário")
-        senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+        # Formulário com suporte a Enter
+        with st.form("form_login", clear_on_submit=False):
+            nome_login  = st.text_input("Usuário", placeholder="Digite seu usuário")
+            senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            entrar      = st.form_submit_button("Entrar", use_container_width=True)
 
-        if st.button("Entrar", use_container_width=True):
+        if entrar:
             usuario = carregar_usuario(nome_login)
             if usuario and usuario["senha_hash"] == hash_senha(senha_login):
                 st.session_state.logado       = True
@@ -2789,13 +2795,21 @@ elif op == "Consulta ABQM":
 </div>
 """, unsafe_allow_html=True)
 
-        if animais_abqm.empty:
-            st.warning("Cadastre um animal primeiro para vincular os dados.")
-            animal_ia = None
+        animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"] if not animais_abqm.empty else None
+
+        opcoes_animal = ["➕ Cadastrar como novo animal"] + (animais_abqm["descricao"].tolist() if not animais_abqm.empty else [])
+        escolha_ia = st.selectbox(
+            "O que fazer com os dados extraídos?",
+            opcoes_animal,
+            key="ia_animal",
+            help="Escolha 'Cadastrar como novo animal' para criar um novo cadastro, ou selecione um animal existente para atualizar seus dados ABQM."
+        )
+        animal_ia = None if escolha_ia == "➕ Cadastrar como novo animal" else escolha_ia.split(" - ")[0]
+
+        if animal_ia is None:
+            st.info("📋 Após extrair os dados do PDF, um formulário de cadastro completo será aberto.")
         else:
-            animais_abqm["descricao"] = animais_abqm["nome"] + " - " + animais_abqm["tipo"]
-            escolha_ia = st.selectbox("Vincular ao animal", animais_abqm["descricao"].tolist(), key="ia_animal")
-            animal_ia = escolha_ia.split(" - ")[0]
+            st.info(f"📝 Os dados ABQM serão salvos no animal: **{animal_ia}**")
 
         modo = st.radio("Modo de entrada", ["📄 Upload de PDF", "📋 Colar texto"], horizontal=True)
         texto_extraido = ""
@@ -3033,15 +3047,16 @@ elif op == "Consulta ABQM":
             # ── Opção: vincular a existente OU cadastrar novo ──
             st.markdown("---")
             st.markdown("""
-<div style="font-size:0.68rem;color:rgba(212,175,80,0.5);text-transform:uppercase;
+<div style="font-size:0.68rem;color:rgba(201,168,76,0.6);text-transform:uppercase;
 letter-spacing:0.12em;margin-bottom:10px">O que deseja fazer com esses dados?</div>
 """, unsafe_allow_html=True)
 
             acao_col1, acao_col2 = st.columns(2)
 
             with acao_col1:
+                _tem_animal = bool(st.session_state.get("abqm_ia_animal"))
                 if st.button("💾 Salvar em animal existente", use_container_width=True,
-                             disabled=not st.session_state.get("abqm_ia_animal")):
+                             disabled=not _tem_animal):
                     c.execute("""
                         UPDATE animais
                         SET registro_abqm=%s, nome_oficial_abqm=%s,
@@ -3081,6 +3096,10 @@ letter-spacing:0.12em;margin-bottom:10px">O que deseja fazer com esses dados?</d
             with acao_col2:
                 if st.button("🐎 Cadastrar como novo animal", use_container_width=True):
                     st.session_state["abqm_novo_animal"] = True
+
+            # Se escolheu "Novo animal" no seletor, abre o form automaticamente
+            if animal_ia is None and not st.session_state.get("abqm_novo_animal"):
+                st.session_state["abqm_novo_animal"] = True
 
             # ── Formulário de cadastro novo animal ──────────
             if st.session_state.get("abqm_novo_animal"):
