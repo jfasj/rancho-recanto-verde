@@ -187,6 +187,7 @@ _SCHEMA = {
         "animal", "tipo", "procedimento", "produto", "data_aplicacao",
         "proxima_dose", "quantidade_usada", "unidade", "preco_unitario",
         "custo_total", "responsavel", "obs",
+        "status_aplicacao", "data_confirmacao", "confirmado_por",
     ],
     "tratamentos": [
         "animal", "tipo", "data", "motivo", "diagnostico", "tratamento",
@@ -194,6 +195,7 @@ _SCHEMA = {
         "preco_unitario", "custo_total", "veterinario", "retorno",
         "funcionario_responsavel", "telefone_funcionario",
         "data_hora_medicacao", "gerar_alerta_whatsapp", "obs",
+        "status_aplicacao", "data_confirmacao", "confirmado_por",
     ],
     "pesagens": ["animal", "tipo", "data_pesagem", "peso", "obs"],
     "doadoras": [
@@ -2708,6 +2710,36 @@ if op == "Dashboard":
             st.info("Nenhum recebimento cadastrado.")
 
     st.markdown("---")
+    # ── Alerta de aplicações pendentes de confirmação ────────
+    try:
+        pend_san = pd.read_sql_query(
+            "SELECT COUNT(*) as total FROM sanitario WHERE (status_aplicacao = 'Agendado' OR status_aplicacao IS NULL OR status_aplicacao = '') AND produto IS NOT NULL",
+            get_engine()
+        ).iloc[0]["total"]
+        pend_vet = pd.read_sql_query(
+            "SELECT COUNT(*) as total FROM ficha_medicacoes WHERE (status = 'Agendada' OR status IS NULL OR status = '') AND medicamento IS NOT NULL",
+            get_engine()
+        ).iloc[0]["total"]
+        total_pend = int(pend_san or 0) + int(pend_vet or 0)
+        if total_pend > 0:
+            st.markdown(f"""
+<div style='background:rgba(232,184,75,0.1);border:1px solid rgba(232,184,75,0.3);
+border-left:4px solid #e8b84b;border-radius:0 10px 10px 0;
+padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center'>
+  <div>
+    <div style='font-weight:500;color:#e8b84b;font-size:0.92rem'>
+      ⏳ {total_pend} aplicação(ões) aguardando confirmação
+    </div>
+    <div style='font-size:0.78rem;color:var(--muted);margin-top:2px'>
+      {'💉 '+str(pend_san)+' sanitária(s)' if pend_san else ''}{' &nbsp;·&nbsp; ' if pend_san and pend_vet else ''}{'🩺 '+str(pend_vet)+' veterinária(s)' if pend_vet else ''}
+      &nbsp;·&nbsp; Estoque NÃO foi baixado ainda
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+    except Exception:
+        pass
+
     # ── Próximos eventos da Agenda ──────────────────────────
     try:
         df_prox = pd.read_sql_query(
@@ -3033,7 +3065,7 @@ elif op == "Controle Sanitário":
 
     aba = st.radio(
         "Opção",
-        ["Registrar Vacina", "Registrar Vermifugação", "Alertas Sanitários", "Histórico Sanitário"],
+        ["Registrar Vacina", "Registrar Vermifugação", "✅ Confirmar Aplicação", "Alertas Sanitários", "Histórico Sanitário"],
         horizontal=True
     )
 
@@ -3078,26 +3110,115 @@ elif op == "Controle Sanitário":
             custo_total = quantidade_usada * preco_unitario
             st.metric("Custo da aplicação", moeda(custo_total))
 
-            if st.button("Salvar e Baixar Estoque"):
+            if st.button("💾 Salvar Procedimento", use_container_width=True):
                 if quantidade_usada <= 0:
                     st.error("Informe a quantidade usada.")
+                else:
+                    preco_unitario_calc = 0.0
+                    med_ref = pd.read_sql_query(
+                        "SELECT preco_por_controle, preco FROM farmacia WHERE medicamento = %s",
+                        get_engine(), params=(produto,)
+                    )
+                    if not med_ref.empty:
+                        preco_unitario_calc = float(med_ref.iloc[0].get("preco_por_controle") or med_ref.iloc[0].get("preco") or 0)
 
-                ok, nova_qtd, preco_unitario, erro = baixar_estoque(produto, quantidade_usada)
-                if not ok:
-                    st.error(erro)
+                    c.execute("""
+                        INSERT INTO sanitario
+                        (animal, tipo, procedimento, produto, data_aplicacao, proxima_dose,
+                         quantidade_usada, unidade, preco_unitario, custo_total, responsavel, obs,
+                         status_aplicacao)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        animal_nome, animal_tipo, procedimento, produto, br_data(data_aplicacao),
+                        br_data(proxima_dose), str(quantidade_usada), unidade,
+                        str(preco_unitario_calc), str(quantidade_usada * preco_unitario_calc),
+                        responsavel, obs, "Agendado"
+                    ))
+                    conn.commit()
+                    st.success(f"✅ {procedimento} registrado! Estoque será baixado quando confirmar a aplicação.")
 
-                c.execute("""
-                    INSERT INTO sanitario
-                    (animal, tipo, procedimento, produto, data_aplicacao, proxima_dose,
-                     quantidade_usada, unidade, preco_unitario, custo_total, responsavel, obs)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    animal_nome, animal_tipo, procedimento, produto, br_data(data_aplicacao),
-                    br_data(proxima_dose), str(quantidade_usada), unidade,
-                    str(preco_unitario), str(custo_total), responsavel, obs
-                ))
-                conn.commit()
-                st.success(f"{procedimento} registrada. Estoque baixado. Custo: {moeda(custo_total)}")
+    elif aba == "✅ Confirmar Aplicação":
+        titulo_pagina("✅ Confirmar Aplicação", "Confirme que o medicamento/vacina foi aplicado — o estoque será baixado neste momento")
+
+        # Busca todos os registros pendentes de confirmação
+        try:
+            df_pend = pd.read_sql_query("""
+                SELECT id, animal, tipo, procedimento, produto, data_aplicacao,
+                       quantidade_usada, unidade, responsavel, status_aplicacao
+                FROM sanitario
+                WHERE (status_aplicacao = 'Agendado' OR status_aplicacao IS NULL OR status_aplicacao = '')
+                AND produto IS NOT NULL
+                ORDER BY data_aplicacao DESC
+            """, get_engine())
+        except Exception:
+            df_pend = pd.DataFrame()
+
+        if df_pend.empty:
+            st.success("✅ Nenhuma aplicação pendente de confirmação!")
+        else:
+            st.info(f"📋 {len(df_pend)} aplicação(ões) aguardando confirmação de que foi aplicado ao animal.")
+
+            _nome_conf = st.session_state.get("usuario", {}).get("nome", "")
+            confirmado_por = st.text_input("Seu nome (quem está confirmando)", value=_nome_conf)
+
+            for _, row in df_pend.iterrows():
+                rid = str(row["id"])
+                cor_status = "#e8b84b"
+
+                st.markdown(f"""
+<div style='background:var(--surface);border:1px solid rgba(232,184,75,0.3);
+border-left:4px solid {cor_status};border-radius:0 10px 10px 0;
+padding:12px 16px;margin-bottom:8px'>
+  <div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px'>
+    <div>
+      <div style='font-weight:500;color:var(--text);font-size:0.92rem'>
+        🐎 {row.get("animal","")} — {row.get("procedimento","")}
+      </div>
+      <div style='font-size:0.78rem;color:var(--muted);margin-top:3px'>
+        💊 {row.get("produto","")} &nbsp;·&nbsp;
+        📦 {row.get("quantidade_usada","")} {row.get("unidade","")} &nbsp;·&nbsp;
+        📅 {row.get("data_aplicacao","")} &nbsp;·&nbsp;
+        👤 {row.get("responsavel","")}
+      </div>
+    </div>
+    <span style='font-size:0.7rem;background:rgba(232,184,75,0.15);color:#e8b84b;
+    border:1px solid rgba(232,184,75,0.3);border-radius:99px;padding:2px 10px'>
+      Aguardando confirmação
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+                with col_c2:
+                    if st.button("✅ Confirmar aplicação", key=f"conf_san_{rid}", use_container_width=True):
+                        # Baixa o estoque AGORA
+                        qtd = float(row.get("quantidade_usada") or 0)
+                        produto_nome = str(row.get("produto", ""))
+                        ok, nova_qtd, preco_u, erro = baixar_estoque(produto_nome, qtd)
+
+                        if not ok:
+                            st.error(f"⚠️ {erro} — Aplicação confirmada mas estoque não alterado.")
+                        else:
+                            st.success(f"✅ Estoque de '{produto_nome}' atualizado: {nova_qtd:.1f} restantes.")
+
+                        c.execute("""
+                            UPDATE sanitario
+                            SET status_aplicacao = %s, data_confirmacao = %s, confirmado_por = %s
+                            WHERE id = %s
+                        """, ("Aplicado", datetime.now().strftime("%d/%m/%Y %H:%M"),
+                              confirmado_por, rid))
+                        conn.commit()
+                        listar_farmacia.clear()
+                        st.rerun()
+
+                with col_c3:
+                    if st.button("❌ Cancelar", key=f"canc_san_{rid}", use_container_width=True):
+                        c.execute("""
+                            UPDATE sanitario SET status_aplicacao = %s WHERE id = %s
+                        """, ("Cancelado", rid))
+                        conn.commit()
+                        st.rerun()
 
     elif aba == "Alertas Sanitários":
         df = pd.read_sql_query("SELECT * FROM sanitario WHERE animal IS NOT NULL", get_engine())
@@ -4492,7 +4613,7 @@ elif op == "Veterinário / Tratamentos":
 
     aba = st.radio(
         "Opção",
-        ["Nova Ficha Médica", "Histórico de Fichas", "Medicações Agendadas"],
+        ["Nova Ficha Médica", "Histórico de Fichas", "✅ Confirmar Aplicação", "Medicações Agendadas"],
         horizontal=True
     )
 
@@ -4701,17 +4822,10 @@ elif op == "Veterinário / Tratamentos":
 
                         ficha_id = c.lastrowid
 
-                        # Salva cada medicação, agenda alerta e baixa estoque
+                        # Salva cada medicação SEM baixar estoque (aguarda confirmação de aplicação)
                         for item in st.session_state.medicacoes_ficha_temp:
-                            ok, nova_qtd, preco_unitario_final, erro = baixar_estoque(
-                                item["medicamento"],
-                                float(item["quantidade"])
-                            )
-
-                            if not ok:
-                                st.error(erro)
-
-                            custo_item_final = float(item["quantidade"]) * float(preco_unitario_final or item["preco_unitario"])
+                            preco_unitario_final = float(item.get("preco_unitario") or 0)
+                            custo_item_final = float(item["quantidade"]) * preco_unitario_final
 
                             c.execute("""
                                 INSERT INTO ficha_medicacoes
@@ -4842,6 +4956,77 @@ elif op == "Veterinário / Tratamentos":
     # -----------------------------------------------------
     # MEDICAÇÕES AGENDADAS
     # -----------------------------------------------------
+    elif aba == "✅ Confirmar Aplicação":
+        titulo_pagina("✅ Confirmar Aplicação Veterinária", "Confirme que o medicamento foi aplicado — o estoque será baixado neste momento")
+
+        try:
+            df_pend_vet = pd.read_sql_query("""
+                SELECT fm.id, fm.animal, fm.medicamento, fm.quantidade, fm.unidade,
+                       fm.dosagem, fm.data_hora, fm.funcionario, fm.status,
+                       fic.data as data_ficha, fic.veterinario
+                FROM ficha_medicacoes fm
+                LEFT JOIN fichas_medicas fic ON fm.ficha_id::text = fic.id::text
+                WHERE (fm.status = 'Agendada' OR fm.status IS NULL OR fm.status = '')
+                AND fm.medicamento IS NOT NULL
+                ORDER BY fm.data_hora DESC
+            """, get_engine())
+        except Exception:
+            df_pend_vet = pd.DataFrame()
+
+        if df_pend_vet.empty:
+            st.success("✅ Nenhuma medicação veterinária pendente de confirmação!")
+        else:
+            st.info(f"💊 {len(df_pend_vet)} medicação(ões) aguardando confirmação de aplicação.")
+
+            _nome_conf_v = st.session_state.get("usuario", {}).get("nome", "")
+            confirmado_por_v = st.text_input("Seu nome (quem está confirmando)", value=_nome_conf_v, key="conf_vet_nome")
+
+            for _, row in df_pend_vet.iterrows():
+                rid = str(row["id"])
+                st.markdown(f"""
+<div style='background:var(--surface);border:1px solid rgba(74,143,207,0.3);
+border-left:4px solid #4a8fcf;border-radius:0 10px 10px 0;
+padding:12px 16px;margin-bottom:8px'>
+  <div style='font-weight:500;color:var(--text);font-size:0.92rem'>
+    🐎 {row.get("animal","")} — 💊 {row.get("medicamento","")}
+  </div>
+  <div style='font-size:0.78rem;color:var(--muted);margin-top:3px'>
+    📦 {row.get("quantidade","")} {row.get("unidade","")}
+    &nbsp;·&nbsp; 💉 {row.get("dosagem","")}
+    &nbsp;·&nbsp; 🕐 {row.get("data_hora","")}
+    &nbsp;·&nbsp; 👤 {row.get("funcionario","")}
+    {'&nbsp;·&nbsp; 🩺 Dr. '+str(row.get("veterinario","")) if row.get("veterinario") else ""}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+                with col_c2:
+                    if st.button("✅ Confirmar aplicação", key=f"conf_vet_{rid}", use_container_width=True):
+                        qtd = float(row.get("quantidade") or 0)
+                        med_nome = str(row.get("medicamento", ""))
+                        ok, nova_qtd, preco_u, erro = baixar_estoque(med_nome, qtd)
+
+                        if not ok:
+                            st.error(f"⚠️ {erro} — Aplicação confirmada mas estoque não alterado.")
+                        else:
+                            st.success(f"✅ Estoque de '{med_nome}' atualizado: {nova_qtd:.1f} restantes.")
+
+                        c.execute("""
+                            UPDATE ficha_medicacoes
+                            SET status = %s, data_alerta = %s
+                            WHERE id = %s
+                        """, ("Aplicada", datetime.now().strftime("%d/%m/%Y %H:%M"), rid))
+                        conn.commit()
+                        listar_farmacia.clear()
+                        st.rerun()
+
+                with col_c3:
+                    if st.button("❌ Cancelar", key=f"canc_vet_{rid}", use_container_width=True):
+                        c.execute("UPDATE ficha_medicacoes SET status = %s WHERE id = %s", ("Cancelada", rid))
+                        conn.commit()
+                        st.rerun()
+
     elif aba == "Medicações Agendadas":
         meds = pd.read_sql_query("SELECT * FROM ficha_medicacoes WHERE medicamento IS NOT NULL ORDER BY data_hora", get_engine())
 
