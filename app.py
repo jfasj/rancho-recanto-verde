@@ -3949,6 +3949,11 @@ padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
 
                 df_edit = pd.DataFrame(rows)
 
+                # Converte colunas numéricas para string para evitar conflito de tipo
+                df_edit["quantidade"]     = df_edit["quantidade"].astype(str)
+                df_edit["valor_unitario"] = df_edit["valor_unitario"].astype(str)
+                df_edit["valor_total"]    = df_edit["valor_total"].astype(str)
+
                 df_editado = st.data_editor(
                     df_edit,
                     use_container_width=True,
@@ -3969,6 +3974,7 @@ padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
                         "unidade":        st.column_config.TextColumn("Un"),
                         "valor_unitario": st.column_config.TextColumn("R$ Unit."),
                         "valor_total":    st.column_config.TextColumn("R$ Total"),
+                        "ncm":            st.column_config.TextColumn("NCM"),
                     }
                 )
 
