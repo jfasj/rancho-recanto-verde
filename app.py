@@ -176,7 +176,8 @@ _SCHEMA = {
         "pelagem_abqm", "modalidade_abqm", "reg_mae_abqm", "reg_pai_abqm",
     ],
     "farmacia": [
-        "medicamento", "categoria", "quantidade", "estoque_min", "unidade",
+        "medicamento", "nome_comercial", "principio_ativo", "categoria",
+        "quantidade", "estoque_min", "unidade",
         "preco", "validade", "fornecedor", "obs",
         "quantidade_compra", "unidade_compra", "volume_por_unidade",
         "unidade_controle", "estoque_convertido", "estoque_min_controle",
@@ -4178,10 +4179,33 @@ elif op == "Farmácia":
     )
 
     if aba == "Cadastrar Medicamento":
+        st.markdown("""
+<div style='background:var(--surface);border:1px solid rgba(201,168,76,0.2);border-left:3px solid var(--gold);
+border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:16px;font-size:0.85rem;color:var(--muted)'>
+💡 <strong style='color:var(--text)'>Dica:</strong> Use o <strong>Princípio Ativo</strong> para agrupar produtos iguais com nomes diferentes.
+Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" — mesmo produto, fornecedores diferentes.
+</div>
+""", unsafe_allow_html=True)
+
         col1, col2 = st.columns(2)
 
         with col1:
-            medicamento = st.text_input("Medicamento")
+            principio_ativo = st.text_input("Princípio Ativo *", placeholder="Ex: Ivermectina 1%, Penicilina G, Flunixin Meglumine")
+            nome_comercial  = st.text_input("Nome Comercial / Marca", placeholder="Ex: IVOMEC, BANAMINE, PENTABIÓTICO")
+            medicamento     = nome_comercial if nome_comercial else principio_ativo
+
+            # Sugestão automática: verifica se já existe produto com mesmo princípio ativo
+            if principio_ativo:
+                existentes_pa = pd.read_sql_query(
+                    "SELECT medicamento, fornecedor, estoque_convertido, unidade_controle FROM farmacia WHERE principio_ativo ILIKE %s",
+                    get_engine(), params=(f"%{principio_ativo}%",)
+                )
+                if not existentes_pa.empty:
+                    st.info(f"⚠️ Já existe(m) {len(existentes_pa)} produto(s) com este princípio ativo no estoque:")
+                    for _, ep in existentes_pa.iterrows():
+                        st.caption(f"• {ep['medicamento']} | Fornecedor: {ep.get('fornecedor','—')} | Estoque: {ep.get('estoque_convertido','?')} {ep.get('unidade_controle','')}")
+                    st.caption("Você pode cadastrar mesmo assim (estoques são somados por princípio ativo no relatório).")
+
             categoria = st.selectbox(
                 "Categoria",
                 ["Antibiótico", "Anti-inflamatório", "Vermífugo", "Vacina", "Suplemento", "Curativo", "Hormônio", "Reprodução", "Soro", "Outro"]
@@ -4190,8 +4214,7 @@ elif op == "Farmácia":
             unidade_compra = st.selectbox("Unidade da compra", ["FR", "UN", "CX", "AMP", "L", "mL", "KG", "G", "SC", "Outro"])
             volume_por_unidade = st.number_input(
                 "Volume por unidade",
-                min_value=0.0,
-                step=1.0,
+                min_value=0.0, step=1.0,
                 help="Exemplo: frasco 50 mL = informe 50. Soro 1 litro = informe 1 e unidade controle L."
             )
             unidade_sugerida = sugerir_unidade_controle(medicamento, unidade_compra)
@@ -4217,13 +4240,15 @@ elif op == "Farmácia":
         if st.button("Salvar Medicamento"):
             c.execute("""
                 INSERT INTO farmacia
-                (medicamento, categoria, quantidade, unidade, validade, fornecedor,
+                (medicamento, nome_comercial, principio_ativo, categoria,
+                 quantidade, unidade, validade, fornecedor,
                  obs, estoque_min, preco, quantidade_compra, unidade_compra,
                  volume_por_unidade, unidade_controle, estoque_convertido,
                  estoque_min_controle, preco_por_controle)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                medicamento, categoria, str(quantidade_compra), unidade_compra, br_data(validade),
+                medicamento or principio_ativo, nome_comercial, principio_ativo,
+                categoria, str(quantidade_compra), unidade_compra, br_data(validade),
                 fornecedor, obs, str(estoque_min_controle), str(preco_total),
                 str(quantidade_compra), unidade_compra, str(volume_por_unidade),
                 unidade_controle, str(estoque_convertido), str(estoque_min_controle),
@@ -4249,20 +4274,22 @@ elif op == "Farmácia":
                 df["estoque_min_controle_num"] = coluna_numerica_segura(df, "estoque_min_controle")
                 itens_baixos = len(df[df["estoque_convertido_num"] <= df["estoque_min_controle_num"]])
 
-            col1, col2, col3 = st.columns(3)
+            # Conta princípios ativos únicos
+            principios_unicos = df["principio_ativo"].dropna().nunique() if "principio_ativo" in df.columns else 0
+
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Valor total em estoque", moeda(total_estoque))
             col2.metric("Itens cadastrados", total_itens)
-            col3.metric("Itens em alerta", itens_baixos)
+            col3.metric("Princípios ativos", principios_unicos)
+            col4.metric("Itens em alerta", itens_baixos)
 
             st.markdown("### Ações rápidas")
             col_btn1, col_btn2 = st.columns(2)
-
             with col_btn1:
                 if st.button("🔄 Recalcular volumes pela descrição", use_container_width=True):
                     alterados = recalcular_farmacia_por_descricao(somente_volume_igual_1=True)
                     st.success(f"{alterados} medicamento(s) recalculado(s).")
                     st.rerun()
-
             with col_btn2:
                 st.download_button(
                     "📥 Baixar Estoque Completo",
@@ -4273,25 +4300,56 @@ elif op == "Farmácia":
                 )
 
             st.markdown("---")
-            st.markdown("### Consulta do estoque")
 
-            busca = st.text_input("Buscar medicamento")
-            df_view = df.copy()
+            # Visão agrupada por princípio ativo
+            modo_view = st.radio("Visualizar por", ["📦 Produto individual", "🔬 Princípio Ativo (agrupado)"], horizontal=True)
 
-            if busca:
-                df_view = df_view[df_view["medicamento"].str.contains(busca, case=False, na=False)]
+            if modo_view == "🔬 Princípio Ativo (agrupado)" and "principio_ativo" in df.columns:
+                st.markdown("### Estoque agrupado por Princípio Ativo")
+                st.caption("Soma todos os produtos com mesmo princípio ativo, independente do nome comercial ou fornecedor.")
 
-            resumo_cols = ["id", "medicamento", "categoria", "estoque_convertido", "unidade_controle", "preco_por_controle", "valor_real_estoque"]
-            resumo_cols = [c0 for c0 in resumo_cols if c0 in df_view.columns]
-            st.dataframe(df_view[resumo_cols], use_container_width=True, hide_index=True)
+                df_grupo = df.groupby("principio_ativo").agg(
+                    Produtos=("medicamento", lambda x: " / ".join(x.dropna().unique())),
+                    Fornecedores=("fornecedor", lambda x: " / ".join(x.dropna().unique())),
+                    Estoque_Total=("estoque_convertido_num", "sum"),
+                    Unidade=("unidade_controle", "first"),
+                    Valor_Total=("valor_real_estoque", "sum"),
+                ).reset_index()
+                df_grupo.columns = ["Princípio Ativo", "Nomes Comerciais", "Fornecedores", "Estoque Total", "Un", "Valor Total (R$)"]
+                df_grupo["Valor Total (R$)"] = df_grupo["Valor Total (R$)"].apply(lambda x: f"R$ {x:,.2f}".replace(",","X").replace(".",",").replace("X","."))
+                df_grupo["Estoque Total"] = df_grupo["Estoque Total"].apply(lambda x: f"{x:,.2f}".replace(",","X").replace(".",",").replace("X","."))
+                st.dataframe(df_grupo, use_container_width=True, hide_index=True)
 
-            if not df_view.empty:
-                st.markdown("### Detalhe do medicamento")
-                df_view["descricao"] = df_view["id"].astype(str) + " - " + df_view["medicamento"].fillna("")
-                escolha = st.selectbox("Clique/selecione um medicamento para abrir o detalhe", df_view["descricao"].tolist())
-                med_id = escolha.split(" - ")[0]
+            else:
+                st.markdown("### Consulta do estoque")
+                busca = st.text_input("Buscar medicamento ou princípio ativo")
+                df_view = df.copy()
 
-                med = df[df["id"].astype(str) == str(med_id)].iloc[0]
+                if busca:
+                    mask = (
+                        df_view["medicamento"].str.contains(busca, case=False, na=False) |
+                        df_view.get("principio_ativo", pd.Series(dtype=str)).str.contains(busca, case=False, na=False) |
+                        df_view.get("nome_comercial", pd.Series(dtype=str)).str.contains(busca, case=False, na=False)
+                    )
+                    df_view = df_view[mask]
+
+                resumo_cols = ["id", "medicamento", "principio_ativo", "nome_comercial", "categoria",
+                               "estoque_convertido", "unidade_controle", "preco_por_controle", "valor_real_estoque", "fornecedor"]
+                resumo_cols = [c0 for c0 in resumo_cols if c0 in df_view.columns]
+                st.dataframe(df_view[resumo_cols].rename(columns={
+                    "medicamento": "Produto", "principio_ativo": "Princípio Ativo",
+                    "nome_comercial": "Nome Comercial", "categoria": "Categoria",
+                    "estoque_convertido": "Estoque", "unidade_controle": "Un",
+                    "preco_por_controle": "R$/Un", "valor_real_estoque": "Valor Total",
+                    "fornecedor": "Fornecedor"
+                }), use_container_width=True, hide_index=True)
+
+                if not df_view.empty:
+                    st.markdown("### Detalhe do medicamento")
+                    df_view["descricao"] = df_view["id"].astype(str) + " - " + df_view["medicamento"].fillna("")
+                    escolha = st.selectbox("Clique/selecione um medicamento para abrir o detalhe", df_view["descricao"].tolist())
+                    med_id = escolha.split(" - ")[0]
+                    med = df[df["id"].astype(str) == str(med_id)].iloc[0]
 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Estoque", f"{float(med.get('estoque_convertido') or 0):,.2f} {med.get('unidade_controle') or ''}".replace(",", "X").replace(".", ",").replace("X", "."))
