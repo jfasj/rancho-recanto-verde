@@ -1,10 +1,19 @@
+
 import os
 import re
+import hmac
+import base64
 import hashlib
-import xml.etree.ElementTree as ET
+import bcrypt
+import html as _html_escape
+try:
+    import defusedxml.ElementTree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
 try:
     import psycopg2
     import psycopg2.extras
+    import psycopg2.pool
     from sqlalchemy import create_engine
     _PG_OK = True
 except ImportError:
@@ -95,6 +104,14 @@ st.set_page_config(
 
 LOGO = "logo.png"
 
+
+@st.cache_data
+def _logo_base64():
+    """Lê o logo local e retorna em base64, para embutir via <img src='data:...'>."""
+    with open(LOGO, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
+
+
 def get_secret_value_early(nome, padrao=""):
     try:
         if nome in st.secrets:
@@ -105,35 +122,66 @@ def get_secret_value_early(nome, padrao=""):
 
 
 @st.cache_resource
-def get_connection():
-    """Conecta ao Supabase via SESSION POOLER (compatível com IPv4/Streamlit Cloud)."""
+def get_pool():
+    """
+    Pool de conexões compartilhado entre sessões (thread-safe), via SESSION POOLER
+    do Supabase (compatível com IPv4/Streamlit Cloud). Cada sessão de usuário pega
+    sua própria conexão do pool — evita que todos os usuários dividam a mesma
+    conexão/cursor psycopg2, o que não é seguro para acesso concorrente.
+    """
     db_url = get_secret_value_early("DATABASE_URL")
     if not db_url:
         st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
         st.stop()
     try:
-        conn = psycopg2.connect(
-            db_url,
+        # Tetos conservadores: o "session pooler" do Supabase (plano free) limita
+        # a ~15 conexões simultâneas no total, e o engine SQLAlchemy abaixo (usado
+        # em todas as leituras) também consome parte desse teto. 8 conexões de
+        # escrita + até 5 de leitura deixa margem confortável.
+        return psycopg2.pool.ThreadedConnectionPool(
+            1, 8, db_url,
             cursor_factory=psycopg2.extras.RealDictCursor,
             sslmode="require",
             connect_timeout=15,
         )
-        conn.autocommit = False
-        return conn
     except Exception as e:
         st.error(f"❌ Erro ao conectar ao banco de dados: {e}")
         st.info("Verifique a DATABASE_URL nos Secrets do Streamlit Cloud.")
         st.stop()
 
 
+def get_connection():
+    """Retorna a conexão dedicada da sessão atual (obtida do pool compartilhado)."""
+    conn_atual = st.session_state.get("_db_conn")
+    if conn_atual is None or conn_atual.closed:
+        try:
+            conn_atual = get_pool().getconn()
+        except psycopg2.pool.PoolError:
+            st.error(
+                "❌ O sistema está com muitos acessos simultâneos no momento. "
+                "Aguarde alguns segundos e atualize a página."
+            )
+            st.stop()
+        conn_atual.autocommit = False
+        st.session_state["_db_conn"] = conn_atual
+    return conn_atual
+
+
 @st.cache_resource
 def get_engine():
-    """SQLAlchemy engine para uso com pd.read_sql_query."""
+    """SQLAlchemy engine para uso com pd.read_sql_query (pool próprio, limitado)."""
     db_url = get_secret_value_early("DATABASE_URL")
     # Garantir prefixo correto para SQLAlchemy
     if db_url and db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return create_engine(db_url, connect_args={"sslmode": "require"})
+    return create_engine(
+        db_url,
+        connect_args={"sslmode": "require"},
+        pool_size=3,
+        max_overflow=2,
+        pool_pre_ping=True,
+        pool_recycle=300,
+    )
 
 
 def reconectar_se_necessario():
@@ -149,9 +197,10 @@ def reconectar_se_necessario():
         except Exception:
             pass
         try:
-            st.cache_resource.clear()
+            get_pool().putconn(conn, close=True)
         except Exception:
             pass
+        st.session_state.pop("_db_conn", None)
         conn = get_connection()
         c = conn.cursor()
 
@@ -231,7 +280,7 @@ _SCHEMA = {
         "nome", "cpf", "rg", "telefone", "email", "endereco", "cargo",
         "setor", "salario", "data_admissao", "status", "documentos", "obs",
     ],
-    "usuarios": ["nome", "senha_hash", "perfil", "permissoes", "ativo"],
+    "usuarios": ["nome", "senha_hash", "perfil", "permissoes", "ativo", "tentativas_falhas", "bloqueado_ate"],
     "alertas_whatsapp": [
         "funcionario", "telefone", "tipo_alerta", "mensagem", "data_envio",
         "status", "sid_twilio", "erro_twilio", "obs",
@@ -393,7 +442,28 @@ PERFIS = {
 
 
 def hash_senha(senha):
-    return hashlib.sha256(str(senha).encode("utf-8")).hexdigest()
+    """Gera hash bcrypt (com salt) da senha."""
+    return bcrypt.hashpw(str(senha).encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verificar_senha(senha_digitada, hash_armazenado):
+    """
+    Verifica a senha contra o hash salvo. Suporta hashes bcrypt (novo padrão)
+    e, por compatibilidade, hashes SHA256 antigos sem salt (formato usado
+    antes desta correção) — nesse caso a verificação ainda funciona e o
+    hash é migrado para bcrypt automaticamente no login (ver tela de login).
+    """
+    hash_armazenado = str(hash_armazenado or "")
+    if hash_armazenado.startswith("$2"):
+        try:
+            return bcrypt.checkpw(str(senha_digitada).encode("utf-8"), hash_armazenado.encode("utf-8"))
+        except Exception:
+            return False
+    # Formato antigo (SHA256 sem salt)
+    return hmac.compare_digest(
+        hashlib.sha256(str(senha_digitada).encode("utf-8")).hexdigest(),
+        hash_armazenado
+    )
 
 
 def registrar_auditoria(modulo, acao, descricao=""):
@@ -415,16 +485,6 @@ def registrar_auditoria(modulo, acao, descricao=""):
         pass  # Nunca deixa auditoria quebrar o fluxo principal
 
 
-    """Versão antecipada de get_secret_value para uso no boot."""
-    try:
-        if nome in st.secrets:
-            return st.secrets[nome]
-    except Exception:
-        pass
-    import os as _os
-    return _os.environ.get(nome, padrao)
-
-
 def criar_admin_padrao():
     usuarios = pd.read_sql_query("SELECT * FROM usuarios WHERE nome IS NOT NULL AND nome != ''", get_engine())
     if usuarios.empty:
@@ -433,7 +493,7 @@ def criar_admin_padrao():
             VALUES (%s, %s, %s, %s, %s)
         """, (
             "admin",
-            hash_senha(_get_secret_early("ADMIN_SENHA_INICIAL", "1234")),
+            hash_senha(get_secret_value_early("ADMIN_SENHA_INICIAL", "1234")),
             "Administrador",
             "|".join(TODAS_PERMISSOES),
             "Sim"
@@ -560,6 +620,10 @@ st.markdown("""
 }
 
 /* ── Esconde elementos do Streamlit que não queremos ── */
+/* Barra de cabeçalho padrão do Streamlit — deixa transparente em vez de
+   branca, mas mantém o elemento (contém o botão de recolher a sidebar
+   no mobile). */
+[data-testid="stHeader"] { background: transparent !important; }
 /* Nome do arquivo no topo da sidebar */
 [data-testid="stSidebarHeader"] { display: none !important; }
 [data-testid="stSidebarNavItems"] { display: none !important; }
@@ -945,6 +1009,16 @@ details summary { color: var(--text) !important; font-weight: 500 !important; }
 tipos = ["Equino", "Canino", "Bovino", "Ovino", "Caprino", "Suíno", "Ave", "Felino", "Outro"]
 
 
+def _esc(texto):
+    """
+    Escapa texto vindo de dados do usuário/banco antes de interpolar em HTML
+    (st.markdown com unsafe_allow_html=True), evitando XSS armazenado.
+    Não usar o nome 'html' aqui: já existe variável local 'html' em algumas
+    funções deste arquivo (ex.: _calendario_html) que reaproveita esse nome.
+    """
+    return _html_escape.escape(str(texto if texto is not None else ""))
+
+
 def br_data(data_obj):
     try:
         return data_obj.strftime("%d/%m/%Y")
@@ -1061,9 +1135,23 @@ def baixar_estoque(medicamento, quantidade_usada):
 
 
 
+def _sanitizar_celula_excel(valor):
+    """
+    Neutraliza injeção de fórmula (CSV/Excel formula injection): se o valor
+    começar com =, +, -, @ ou tab/CR, o Excel pode interpretá-lo como fórmula
+    ao abrir o arquivo. Prefixamos com um apóstrofo para forçar texto puro.
+    """
+    if isinstance(valor, str) and valor and valor[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + valor
+    return valor
+
+
 def gerar_excel(df):
     buffer = BytesIO()
-    df.to_excel(buffer, index=False)
+    # Aplica em todas as colunas (não só dtype "object"): pandas recentes usam
+    # dtype "str" nativo para texto, e a função em si já ignora valores não-string.
+    df_seguro = df.apply(lambda col: col.map(_sanitizar_celula_excel))
+    df_seguro.to_excel(buffer, index=False)
     return buffer.getvalue()
 
 
@@ -1112,11 +1200,34 @@ if not st.session_state.logado:
     margin: 0 !important;
     max-width: 100% !important;
 }
+/* Centraliza verticalmente todo o bloco de login na tela, sem depender de
+   margens negativas calibradas manualmente (que quebram se a logo demorar
+   a carregar). */
+.main .block-container {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    min-height: 100vh !important;
+    padding: 24px 0 !important;
+}
 [data-testid="stSidebar"], header, #MainMenu, footer { display: none !important; }
 html, body { background: #1a3a2a !important; overflow-y: hidden !important; }
 /* Esconde scrollbar mas mantém scroll funcional se necessário */
 html::-webkit-scrollbar { display: none !important; }
 html { -ms-overflow-style: none !important; scrollbar-width: none !important; }
+
+/* Reserva espaço para a logo (local ou remota) para não "pular" o layout
+   enquanto a imagem carrega. */
+.login-logo-wrap {
+    width: 100%;
+    max-width: 380px;
+    aspect-ratio: 2.7 / 1;
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.login-logo-wrap img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 /* Centra o form no meio da tela */
 div[data-testid="stForm"] {
@@ -1145,19 +1256,20 @@ div[data-testid="stForm"] button:hover {
 </style>
 """, unsafe_allow_html=True)
 
-    # Espaço topo calculado para centralizar (logo ~200px + subtitulo + form ~220px = ~500px total, centralizando com padding)
-    _logo_html = f"<img src='https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png' style='width:100%;max-width:380px;display:block;margin:0 auto 6px' />" if not os.path.exists(LOGO) else ""
-
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        st.markdown("<div style='margin-top:-55px'></div>", unsafe_allow_html=True)
-
         if os.path.exists(LOGO):
-            st.image(LOGO, width="stretch")
+            st.markdown(
+                f"<div class='login-logo-wrap'><img src='data:image/png;base64,{_logo_base64()}' /></div>",
+                unsafe_allow_html=True
+            )
         else:
-            st.markdown(_logo_html, unsafe_allow_html=True)
-
-        st.markdown("<div style='margin-top:-255px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='login-logo-wrap'>"
+                "<img src='https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png' />"
+                "</div>",
+                unsafe_allow_html=True
+            )
 
         st.markdown("""
 <div style='font-size:0.92rem;font-weight:500;color:#ffffff;margin:0 0 4px;
@@ -1170,15 +1282,66 @@ padding-left:4px'>🔒 Acesso ao Sistema</div>
             senha_login = st.text_input("Senha", type="password", placeholder="Digite sua senha")
             entrar      = st.form_submit_button("Entrar", use_container_width=True)
 
+        LOGIN_MAX_TENTATIVAS = 5
+        LOGIN_BLOQUEIO_MINUTOS = 15
+
         if entrar:
             usuario = carregar_usuario(nome_login)
-            if usuario and usuario["senha_hash"] == hash_senha(senha_login):
+
+            bloqueado_ate_dt = None
+            if usuario and usuario.get("bloqueado_ate"):
+                try:
+                    bloqueado_ate_dt = datetime.strptime(str(usuario["bloqueado_ate"]), "%d/%m/%Y %H:%M:%S")
+                except Exception:
+                    bloqueado_ate_dt = None
+
+            if bloqueado_ate_dt and bloqueado_ate_dt > datetime.now():
+                minutos_restantes = int((bloqueado_ate_dt - datetime.now()).total_seconds() // 60) + 1
+                st.error(f"🔒 Conta temporariamente bloqueada por excesso de tentativas. Tente novamente em {minutos_restantes} minuto(s).")
+            elif usuario and verificar_senha(senha_login, usuario["senha_hash"]):
+                # Login correto: zera contador de tentativas e eventual bloqueio
+                try:
+                    c.execute(
+                        "UPDATE usuarios SET tentativas_falhas = %s, bloqueado_ate = %s WHERE nome = %s",
+                        ("0", "", usuario["nome"])
+                    )
+                    conn.commit()
+                    carregar_usuario.clear()
+                except Exception:
+                    conn.rollback()
+
+                # Migração automática de hashes antigos (SHA256 sem salt) para bcrypt
+                if not str(usuario["senha_hash"]).startswith("$2"):
+                    try:
+                        c.execute(
+                            "UPDATE usuarios SET senha_hash = %s WHERE nome = %s",
+                            (hash_senha(senha_login), usuario["nome"])
+                        )
+                        conn.commit()
+                        carregar_usuario.clear()
+                    except Exception:
+                        conn.rollback()
                 st.session_state.logado       = True
                 st.session_state.usuario      = usuario
                 st.session_state.pagina_atual = "Dashboard"
                 registrar_auditoria("Login", "Acesso", f"Login realizado com sucesso")
                 st.rerun()
             else:
+                # Login incorreto: incrementa tentativas e bloqueia temporariamente se exceder o limite
+                if usuario:
+                    try:
+                        tentativas = int(usuario.get("tentativas_falhas") or 0) + 1
+                        bloqueado_ate_novo = ""
+                        if tentativas >= LOGIN_MAX_TENTATIVAS:
+                            bloqueado_ate_novo = (datetime.now() + timedelta(minutes=LOGIN_BLOQUEIO_MINUTOS)).strftime("%d/%m/%Y %H:%M:%S")
+                        c.execute(
+                            "UPDATE usuarios SET tentativas_falhas = %s, bloqueado_ate = %s WHERE nome = %s",
+                            (str(tentativas), bloqueado_ate_novo, usuario["nome"])
+                        )
+                        conn.commit()
+                        carregar_usuario.clear()
+                    except Exception:
+                        conn.rollback()
                 st.error("Usuário ou senha inválidos.")
 
     st.stop()
@@ -1409,7 +1572,7 @@ def verificar_e_disparar_alertas_auto():
     try:
         df = pd.read_sql_query(
             "SELECT * FROM medicacoes_agendadas WHERE status = 'Agendada' AND alerta_gerado = 'Não'",
-            conn
+            get_engine()
         )
     except Exception:
         return 0
@@ -1671,10 +1834,10 @@ with st.sidebar:
         _iniciais = "".join([p[0].upper() for p in _nome_u.split()[:2]]) if _nome_u else "?"
         st.markdown(f"""
 <div style='display:flex;align-items:center;gap:10px;padding:8px 0 14px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:10px'>
-  <div style='width:36px;height:36px;border-radius:50%;background:rgba(201,168,76,0.2);border:1px solid rgba(201,168,76,0.4);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;color:#c9a84c;flex-shrink:0'>{_iniciais}</div>
+  <div style='width:36px;height:36px;border-radius:50%;background:rgba(201,168,76,0.2);border:1px solid rgba(201,168,76,0.4);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;color:#c9a84c;flex-shrink:0'>{_esc(_iniciais)}</div>
   <div>
-    <div style='font-size:0.85rem;font-weight:500;color:#ffffff'>{_nome_u}</div>
-    <div style='display:inline-block;background:rgba(201,168,76,0.15);border:1px solid rgba(201,168,76,0.3);border-radius:999px;padding:1px 9px;font-size:0.65rem;color:#c9a84c;font-weight:500;margin-top:2px;letter-spacing:0.04em'>{_perfil_u}</div>
+    <div style='font-size:0.85rem;font-weight:500;color:#ffffff'>{_esc(_nome_u)}</div>
+    <div style='display:inline-block;background:rgba(201,168,76,0.15);border:1px solid rgba(201,168,76,0.3);border-radius:999px;padding:1px 9px;font-size:0.65rem;color:#c9a84c;font-weight:500;margin-top:2px;letter-spacing:0.04em'>{_esc(_perfil_u)}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1711,20 +1874,34 @@ menu_map = {
 if not menu_map:
     st.error("Seu usuário não possui permissões liberadas.")
 
-# Estado da navegação
-if "pagina_atual" not in st.session_state or st.session_state.pagina_atual not in menu_map.values():
-    st.session_state.pagina_atual = list(menu_map.values())[0]
+# Mapa reverso (página -> rótulo com emoji), usado para navegar programaticamente
+pagina_para_label = {pagina: label for label, pagina in menu_map.items()}
 
-# Menu lateral
+
+def ir_para_pagina(pagina):
+    """
+    Navega para outra página fora do menu lateral (atalhos do topo, botões do
+    Dashboard etc.). Atualiza a key do próprio widget de rádio (menu_radio) em
+    vez de sobrescrever pagina_atual diretamente — sobrescrever pagina_atual e
+    recalcular o "index" do radio a cada rerun, sem uma key fixa, é o que
+    causava o menu lateral "travar" depois do primeiro clique (o widget e o
+    estado da página ficavam dessincronizados).
+    """
+    st.session_state["menu_radio"] = pagina_para_label.get(pagina, list(menu_map.keys())[0])
+
+
+# Estado da navegação: a key do widget (menu_radio) é a fonte da verdade.
+if "menu_radio" not in st.session_state:
+    ir_para_pagina(st.session_state.get("pagina_atual", list(menu_map.values())[0]))
+
+# Menu lateral — key fixa, sem index recalculado a cada rerun
 op_display = st.sidebar.radio(
     "Menu",
     list(menu_map.keys()),
-    index=list(menu_map.values()).index(st.session_state.pagina_atual)
-        if st.session_state.pagina_atual in list(menu_map.values()) else 0,
+    key="menu_radio",
     label_visibility="collapsed"
 )
 
-# Se o usuário clicar no menu lateral, atualiza a página
 st.session_state.pagina_atual = menu_map[op_display]
 
 # Menu superior clicável com permissões
@@ -1742,7 +1919,7 @@ if atalhos:
     for col, (label, pagina) in zip(cols, atalhos):
         with col:
             if st.button(label, use_container_width=True):
-                st.session_state.pagina_atual = pagina
+                ir_para_pagina(pagina)
                 st.rerun()
 
 op = st.session_state.pagina_atual
@@ -1833,15 +2010,15 @@ def _calendario_html(ano, mes, eventos_df):
 .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
 .cal-dow { text-align:center; font-size:0.68rem; color:rgba(212,175,80,0.5);
   text-transform:uppercase; letter-spacing:0.1em; padding:6px 0; font-weight:400; }
-.cal-day { background:#0d1f3c; border:1px solid rgba(212,175,80,0.1);
+.cal-day { background:#17331f; border:1px solid rgba(212,175,80,0.1);
   border-radius:10px; min-height:80px; padding:6px; position:relative;
   transition:border-color .15s; }
 .cal-day:hover { border-color:rgba(212,175,80,0.3); }
 .cal-day.empty { background:transparent; border-color:transparent; }
-.cal-day.hoje { border-color:#d4af50; background:#0f2444; }
+.cal-day.hoje { border-color:#d4af50; background:#1e4230; }
 .cal-day.hoje .cal-num { color:#d4af50; }
-.cal-num { font-size:0.78rem; font-weight:500; color:#7a8fa3; margin-bottom:4px; }
-.cal-ev { font-size:0.65rem; color:#0a1628; border-radius:4px; padding:2px 5px;
+.cal-num { font-size:0.78rem; font-weight:500; color:#9ab8a8; margin-bottom:4px; }
+.cal-ev { font-size:0.65rem; color:#12261a; border-radius:4px; padding:2px 5px;
   margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   font-weight:500; line-height:1.4; }
 .cal-more { font-size:0.6rem; color:#5a7a6a; }
@@ -1867,7 +2044,7 @@ def _calendario_html(ano, mes, eventos_df):
                 evs = ev_por_dia.get(dia, [])
                 for ev in evs[:3]:
                     cor = _cor_evento(ev.get("tipo", ""))
-                    titulo = str(ev.get("titulo", ""))[:22]
+                    titulo = _esc(str(ev.get("titulo", ""))[:22])
                     html += f'<div class="cal-ev" style="background:{cor}">{titulo}</div>'
                 if len(evs) > 3:
                     html += f'<div class="cal-more">+{len(evs)-3} mais</div>'
@@ -1889,7 +2066,7 @@ if op == "Agenda":
     animais_ag = listar_animais()
     funcionarios_ag = pd.read_sql_query(
         "SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != '' AND status = 'Ativo'",
-        conn
+        get_engine()
     )
 
     # ── CALENDÁRIO ─────────────────────────────────────────
@@ -1962,23 +2139,23 @@ if op == "Agenda":
                 status_cor = "#4a9e6b" if status_ev == "Concluído" else ("#e05252" if status_ev == "Cancelado" else "#e8b84b")
 
                 st.markdown(f"""
-<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+<div style="background:#17331f;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
 border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px;display:flex;
 align-items:center;justify-content:space-between;gap:12px">
   <div style="flex:1">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-      <span style="font-size:0.9rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+      <span style="font-size:0.9rem;font-weight:500;color:#e8e2d5">{_esc(ev.get('titulo',''))}</span>
       <span style="font-size:0.68rem;background:{status_cor}22;color:{status_cor};
-        border:1px solid {status_cor}44;border-radius:99px;padding:1px 8px">{status_ev}</span>
+        border:1px solid {status_cor}44;border-radius:99px;padding:1px 8px">{_esc(status_ev)}</span>
     </div>
     <div style="font-size:0.78rem;color:#5a7a6a">
-      📅 {ev.get('data','')} &nbsp;·&nbsp;
-      🕐 {ev.get('hora_inicio','')}{'–'+ev.get('hora_fim','') if ev.get('hora_fim') else ''} &nbsp;·&nbsp;
-      {ev.get('tipo','')}
+      📅 {_esc(ev.get('data',''))} &nbsp;·&nbsp;
+      🕐 {_esc(ev.get('hora_inicio',''))}{'–'+_esc(ev.get('hora_fim','')) if ev.get('hora_fim') else ''} &nbsp;·&nbsp;
+      {_esc(ev.get('tipo',''))}
     </div>
     <div style="font-size:0.78rem;color:#7a8fa3;margin-top:2px">
-      {'🐎 '+ev.get('animal','') if ev.get('animal') else ''}
-      {'&nbsp;·&nbsp; 👤 '+ev.get('funcionario','') if ev.get('funcionario') else ''}
+      {'🐎 '+_esc(ev.get('animal','')) if ev.get('animal') else ''}
+      {'&nbsp;·&nbsp; 👤 '+_esc(ev.get('funcionario','')) if ev.get('funcionario') else ''}
     </div>
   </div>
 </div>
@@ -2092,17 +2269,17 @@ align-items:center;justify-content:space-between;gap:12px">
                 colA, colB, colC = st.columns([5, 1, 1])
                 with colA:
                     st.markdown(f"""
-<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+<div style="background:#17331f;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
 border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
   <div style="display:flex;align-items:center;gap:8px">
-    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{_esc(ev.get('titulo',''))}</span>
     <span style="font-size:0.65rem;background:{status_cor}22;color:{status_cor};
-      border:1px solid {status_cor}44;border-radius:99px;padding:1px 7px">{status_ev}</span>
+      border:1px solid {status_cor}44;border-radius:99px;padding:1px 7px">{_esc(status_ev)}</span>
   </div>
   <div style="font-size:0.75rem;color:#5a7a6a;margin-top:3px">
-    📅 {ev.get('data','')} · 🕐 {ev.get('hora_inicio','')} · {ev.get('tipo','')}
-    {'· 🐎 '+ev.get('animal','') if ev.get('animal') else ''}
-    {'· 👤 '+ev.get('funcionario','') if ev.get('funcionario') else ''}
+    📅 {_esc(ev.get('data',''))} · 🕐 {_esc(ev.get('hora_inicio',''))} · {_esc(ev.get('tipo',''))}
+    {'· 🐎 '+_esc(ev.get('animal','')) if ev.get('animal') else ''}
+    {'· 👤 '+_esc(ev.get('funcionario','')) if ev.get('funcionario') else ''}
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2119,6 +2296,7 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
                     if st.button("🗑️", key=f"del_{ev_id}", help="Excluir evento"):
                         c.execute("DELETE FROM agenda WHERE id = %s", (ev_id,))
                         conn.commit()
+                        registrar_auditoria("Agenda", "Exclusão", f"Evento '{ev.get('titulo','')}' (id {ev_id}) excluído")
                         _carregar_agenda.clear()
                         st.rerun()
 
@@ -2271,7 +2449,7 @@ border-left:4px solid #e05a5a;border-radius:10px;padding:14px 18px;margin-bottom
   <div style='font-weight:500;color:#e05a5a;margin-bottom:8px'>
     ⚠️ {len(alertas)} produto(s) com estoque baixo ou zerado!
   </div>
-  {''.join(f"<div style='font-size:0.85rem;color:#f0ece3;margin-top:4px'>• {row['produto']} — {row['qtd_num']:.1f} kg restantes (mínimo: {row['min_num']:.1f} kg)</div>"
+  {''.join(f"<div style='font-size:0.85rem;color:#f0ece3;margin-top:4px'>• {_esc(row['produto'])} — {row['qtd_num']:.1f} kg restantes (mínimo: {row['min_num']:.1f} kg)</div>"
             for _, row in alertas.iterrows())}
 </div>
 """, unsafe_allow_html=True)
@@ -2428,8 +2606,8 @@ border-left:4px solid #e05a5a;border-radius:10px;padding:14px 18px;margin-bottom
                     st.markdown(f"""
 <div style='background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--gold);
 border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px'>
-  <div style='font-weight:500;color:var(--text);margin-bottom:6px'>🐎 {animal_nome} — {total_dia:.1f} kg/dia total</div>
-  {''.join(f"<div style='font-size:0.82rem;color:var(--muted);margin-top:2px'>• {r['turno']}: {r['produto']} — {r['quantidade_kg']} kg</div>" for _, r in df_an.iterrows())}
+  <div style='font-weight:500;color:var(--text);margin-bottom:6px'>🐎 {_esc(animal_nome)} — {total_dia:.1f} kg/dia total</div>
+  {''.join(f"<div style='font-size:0.82rem;color:var(--muted);margin-top:2px'>• {_esc(r['turno'])}: {_esc(r['produto'])} — {r['quantidade_kg']} kg</div>" for _, r in df_an.iterrows())}
 </div>
 """, unsafe_allow_html=True)
 
@@ -2667,7 +2845,7 @@ if op == "Dashboard":
     for col, (icone, titulo, subtitulo, pagina) in zip(linha1, atalhos):
         with col:
             if st.button(f"{icone}\n{titulo}\n{subtitulo}", key=f"atalho_{pagina}", use_container_width=True):
-                st.session_state.pagina_atual = pagina
+                ir_para_pagina(pagina)
                 st.rerun()
 
     linha2 = st.columns(4)
@@ -2681,7 +2859,7 @@ if op == "Dashboard":
     for col, (icone, titulo, subtitulo, pagina) in zip(linha2, atalhos2):
         with col:
             if st.button(f"{icone}\n{titulo}\n{subtitulo}", key=f"atalho_{pagina}", use_container_width=True):
-                st.session_state.pagina_atual = pagina
+                ir_para_pagina(pagina)
                 st.rerun()
 
     st.markdown("""
@@ -2800,21 +2978,21 @@ padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;
                 dias_faltam = (ev["data_dt"].date() - date.today()).days
                 label_dias = "Hoje" if dias_faltam == 0 else f"Em {dias_faltam}d"
                 st.markdown(f"""
-<div style="background:#0d1f3c;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
+<div style="background:#17331f;border:1px solid rgba(212,175,80,0.1);border-left:3px solid {cor};
 border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
   <div>
-    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{ev.get('titulo','')}</span>
+    <span style="font-size:0.88rem;font-weight:500;color:#e8e2d5">{_esc(ev.get('titulo',''))}</span>
     <div style="font-size:0.75rem;color:#5a7a6a;margin-top:2px">
-      {ev.get('data','')} · {ev.get('hora_inicio','')} · {ev.get('tipo','')}
-      {'· '+ev.get('animal','') if ev.get('animal') else ''}
+      {_esc(ev.get('data',''))} · {_esc(ev.get('hora_inicio',''))} · {_esc(ev.get('tipo',''))}
+      {'· '+_esc(ev.get('animal','')) if ev.get('animal') else ''}
     </div>
   </div>
   <span style="font-size:0.72rem;background:rgba(212,175,80,0.1);color:#d4af50;
-    border:1px solid rgba(212,175,80,0.2);border-radius:99px;padding:3px 10px;white-space:nowrap">{label_dias}</span>
+    border:1px solid rgba(212,175,80,0.2);border-radius:99px;padding:3px 10px;white-space:nowrap">{_esc(label_dias)}</span>
 </div>
 """, unsafe_allow_html=True)
             if st.button("Ver agenda completa →", key="dash_agenda"):
-                st.session_state.pagina_atual = "Agenda"
+                ir_para_pagina("Agenda")
                 st.rerun()
     except Exception:
         pass
@@ -3017,7 +3195,7 @@ elif op == "Animais por Tipo":
                     conn.commit()
                     listar_animais.clear()
                     _carregar_dashboard.clear()
-                    registrar_auditoria("Animais", "Alteração", f"Animal '{animal_nome}' alterado")
+                    registrar_auditoria("Animais", "Alteração", f"Animal '{nome}' alterado")
                     st.success("Animal alterado com sucesso!")
                     st.rerun()
 
@@ -3027,6 +3205,7 @@ elif op == "Animais por Tipo":
                     if confirmar:
                         c.execute("DELETE FROM animais WHERE id = %s", (animal_id,))
                         conn.commit()
+                        registrar_auditoria("Animais", "Exclusão", f"Animal '{nome}' (id {animal_id}) excluído")
                         listar_animais.clear()
                         _carregar_dashboard.clear()
                         st.success("Animal excluído com sucesso!")
@@ -3215,13 +3394,13 @@ padding:12px 16px;margin-bottom:8px'>
   <div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px'>
     <div>
       <div style='font-weight:500;color:var(--text);font-size:0.92rem'>
-        🐎 {row.get("animal","")} — {row.get("procedimento","")}
+        🐎 {_esc(row.get("animal",""))} — {_esc(row.get("procedimento",""))}
       </div>
       <div style='font-size:0.78rem;color:var(--muted);margin-top:3px'>
-        💊 {row.get("produto","")} &nbsp;·&nbsp;
-        📦 {row.get("quantidade_usada","")} {row.get("unidade","")} &nbsp;·&nbsp;
-        📅 {row.get("data_aplicacao","")} &nbsp;·&nbsp;
-        👤 {row.get("responsavel","")}
+        💊 {_esc(row.get("produto",""))} &nbsp;·&nbsp;
+        📦 {_esc(row.get("quantidade_usada",""))} {_esc(row.get("unidade",""))} &nbsp;·&nbsp;
+        📅 {_esc(row.get("data_aplicacao",""))} &nbsp;·&nbsp;
+        👤 {_esc(row.get("responsavel",""))}
       </div>
     </div>
     <span style='font-size:0.7rem;background:rgba(232,184,75,0.15);color:#e8b84b;
@@ -3253,7 +3432,7 @@ padding:12px 16px;margin-bottom:8px'>
                               confirmado_por, rid))
                         conn.commit()
                         listar_farmacia.clear()
-                        registrar_auditoria("Sanitário", "Confirmação de aplicação", f"Aplicação confirmada: {row.get("produto","")} em {row.get("animal","")}")
+                        registrar_auditoria("Sanitário", "Confirmação de aplicação", f"Aplicação confirmada: {row.get('produto','')} em {row.get('animal','')}")
                         st.rerun()
 
                 with col_c3:
@@ -3828,8 +4007,6 @@ padding:16px;margin-top:12px">
     # ── ÁRVORE GENEALÓGICA ─────────────────────────────────
     elif aba == "🌳 Árvore Genealógica":
         titulo_pagina("🌳 Árvore Genealógica", "Visualização da linhagem do animal")
-    elif aba == "🌳 Árvore Genealógica":
-        titulo_pagina("🌳 Árvore Genealógica", "Visualização da linhagem do animal")
 
         if animais_abqm.empty:
             st.warning("Nenhum animal cadastrado.")
@@ -3863,11 +4040,11 @@ padding:16px;margin-top:12px">
             nasc       = str(a.get("nascimento") or "")
 
             def _no(nome, reg="", cor="#0d1f3c", borda="#d4af50", texto="#e8e2d5"):
-                reg_txt = f"<div style='font-size:0.6rem;color:#7a8fa3;margin-top:1px'>{reg}</div>" if reg else ""
+                reg_txt = f"<div style='font-size:0.6rem;color:#7a8fa3;margin-top:1px'>{_esc(reg)}</div>" if reg else ""
                 sem_dado = not nome or nome in ("", "None")
                 bg = "rgba(13,31,60,0.4)" if sem_dado else cor
                 op = "0.45" if sem_dado else "1"
-                label = "—" if sem_dado else nome[:28]
+                label = "—" if sem_dado else _esc(nome[:28])
                 return f"""<div style='background:{bg};border:1px solid {borda};border-radius:8px;
 padding:7px 10px;text-align:center;opacity:{op};min-width:130px;max-width:160px'>
 <div style='font-size:0.75rem;font-weight:500;color:{texto};line-height:1.3'>{label}</div>
@@ -3884,7 +4061,7 @@ text-transform:uppercase;letter-spacing:0.12em;text-align:center;margin-bottom:4
 </style>
 <div class="arv-wrap">
 
-  <div class="arv-titulo">Árvore Genealógica — {nome_a}</div>
+  <div class="arv-titulo">Árvore Genealógica — {_esc(nome_a)}</div>
 
   <!-- Cabeçalho de geração -->
   <div style="display:flex;justify-content:center;gap:80px;margin-bottom:2px">
@@ -3899,8 +4076,8 @@ text-transform:uppercase;letter-spacing:0.12em;text-align:center;margin-bottom:4
     <!-- Animal principal -->
     <div style="display:flex;flex-direction:column;align-items:center">
       {_no(nome_a, reg_a, "#0f2444", "#d4af50", "#d4af50")}
-      <div style="font-size:0.62rem;color:#5a7a6a;margin-top:4px">{pelagem}</div>
-      <div style="font-size:0.62rem;color:#5a7a6a">{nasc}</div>
+      <div style="font-size:0.62rem;color:#5a7a6a;margin-top:4px">{_esc(pelagem)}</div>
+      <div style="font-size:0.62rem;color:#5a7a6a">{_esc(nasc)}</div>
     </div>
 
     <div style="color:rgba(212,175,80,0.2);font-size:1.5rem">›</div>
@@ -3958,9 +4135,9 @@ text-transform:uppercase;letter-spacing:0.12em;text-align:center;margin-bottom:4
 
   <!-- Rodapé informativo -->
   <div style="margin-top:16px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
-    <div style="font-size:0.72rem;color:#5a7a6a">🧑‍🌾 Criador: <span style="color:#d4c9b0">{criador or '—'}</span></div>
-    <div style="font-size:0.72rem;color:#5a7a6a">🏠 Proprietário: <span style="color:#d4c9b0">{prop or '—'}</span></div>
-    <div style="font-size:0.72rem;color:#5a7a6a">🎨 Pelagem: <span style="color:#d4c9b0">{pelagem or '—'}</span></div>
+    <div style="font-size:0.72rem;color:#5a7a6a">🧑‍🌾 Criador: <span style="color:#d4c9b0">{_esc(criador) or '—'}</span></div>
+    <div style="font-size:0.72rem;color:#5a7a6a">🏠 Proprietário: <span style="color:#d4c9b0">{_esc(prop) or '—'}</span></div>
+    <div style="font-size:0.72rem;color:#5a7a6a">🎨 Pelagem: <span style="color:#d4c9b0">{_esc(pelagem) or '—'}</span></div>
   </div>
 </div>
 """
@@ -4080,11 +4257,11 @@ elif op == "Importar NF-e / XML":
 <div style='background:var(--surface);border:1px solid var(--line);border-radius:10px;
 padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
   <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>NF-e</div>
-       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("numero_nfe","—")}</div></div>
+       <div style='font-weight:500;color:var(--text)'>{_esc(dados_nfe.get("numero_nfe","—"))}</div></div>
   <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Fornecedor</div>
-       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("fornecedor","—")}</div></div>
+       <div style='font-weight:500;color:var(--text)'>{_esc(dados_nfe.get("fornecedor","—"))}</div></div>
   <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Emissão</div>
-       <div style='font-weight:500;color:var(--text)'>{dados_nfe.get("data_emissao","—")}</div></div>
+       <div style='font-weight:500;color:var(--text)'>{_esc(dados_nfe.get("data_emissao","—"))}</div></div>
   <div><div style='font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em'>Produtos</div>
        <div style='font-weight:500;color:var(--text)'>{len(produtos)}</div></div>
 </div>
@@ -4308,6 +4485,7 @@ padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
             if st.button("🗑️ Excluir da Farmácia", use_container_width=True) and confirmar_del:
                 c.execute("DELETE FROM farmacia WHERE medicamento = %s", (item_del,))
                 conn.commit()
+                registrar_auditoria("Farmácia", "Exclusão", f"Medicamento '{item_del}' excluído (importação NF-e incorreta)")
                 listar_farmacia.clear()
                 _carregar_dashboard.clear()
                 st.success(f"✅ '{item_del}' removido da Farmácia!")
@@ -4617,6 +4795,7 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                     if confirmar:
                         c.execute("DELETE FROM farmacia WHERE id = %s", (med_id,))
                         conn.commit()
+                        registrar_auditoria("Farmácia", "Exclusão", f"Medicamento '{medicamento}' (id {med_id}) excluído")
                         listar_farmacia.clear()
                         _carregar_dashboard.clear()
                         st.success("Medicamento excluído com sucesso!")
@@ -4665,7 +4844,7 @@ elif op == "Veterinário / Tratamentos":
     farmacia = listar_farmacia()
     funcionarios = pd.read_sql_query(
         "SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != '' AND status = 'Ativo'",
-        conn
+        get_engine()
     )
 
     # -----------------------------------------------------
@@ -4850,6 +5029,7 @@ elif op == "Veterinário / Tratamentos":
                              diagnostico, tratamento_indicado, veterinario,
                              retorno, status, custo_total, obs)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING id
                         """, (
                             animal_nome,
                             animal_tipo,
@@ -4864,7 +5044,7 @@ elif op == "Veterinário / Tratamentos":
                             obs_ficha
                         ))
 
-                        ficha_id = c.lastrowid
+                        ficha_id = c.fetchone()["id"]
 
                         # Salva cada medicação SEM baixar estoque (aguarda confirmação de aplicação)
                         for item in st.session_state.medicacoes_ficha_temp:
@@ -5032,14 +5212,14 @@ elif op == "Veterinário / Tratamentos":
 border-left:4px solid #4a8fcf;border-radius:0 10px 10px 0;
 padding:12px 16px;margin-bottom:8px'>
   <div style='font-weight:500;color:var(--text);font-size:0.92rem'>
-    🐎 {row.get("animal","")} — 💊 {row.get("medicamento","")}
+    🐎 {_esc(row.get("animal",""))} — 💊 {_esc(row.get("medicamento",""))}
   </div>
   <div style='font-size:0.78rem;color:var(--muted);margin-top:3px'>
-    📦 {row.get("quantidade","")} {row.get("unidade","")}
-    &nbsp;·&nbsp; 💉 {row.get("dosagem","")}
-    &nbsp;·&nbsp; 🕐 {row.get("data_hora","")}
-    &nbsp;·&nbsp; 👤 {row.get("funcionario","")}
-    {'&nbsp;·&nbsp; 🩺 Dr. '+str(row.get("veterinario","")) if row.get("veterinario") else ""}
+    📦 {_esc(row.get("quantidade",""))} {_esc(row.get("unidade",""))}
+    &nbsp;·&nbsp; 💉 {_esc(row.get("dosagem",""))}
+    &nbsp;·&nbsp; 🕐 {_esc(row.get("data_hora",""))}
+    &nbsp;·&nbsp; 👤 {_esc(row.get("funcionario",""))}
+    {'&nbsp;·&nbsp; 🩺 Dr. '+_esc(str(row.get("veterinario",""))) if row.get("veterinario") else ""}
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -5062,6 +5242,7 @@ padding:12px 16px;margin-bottom:8px'>
                             WHERE id = %s
                         """, ("Aplicada", datetime.now().strftime("%d/%m/%Y %H:%M"), rid))
                         conn.commit()
+                        registrar_auditoria("Veterinário", "Confirmação de aplicação", f"Aplicação confirmada: {med_nome} em {row.get('animal','')}")
                         listar_farmacia.clear()
                         st.rerun()
 
@@ -5306,13 +5487,14 @@ elif op == "Vendas de Animais":
                      comprador_cpf_cnpj, comprador_telefone, comprador_email,
                      comprador_endereco, obs)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 """, (
                     animal_nome, animal_tipo, br_data(data_venda), str(valor_negociado),
                     str(desconto), str(valor_final), forma_pagamento, str(parcelas),
                     status_venda, comprador_nome, comprador_cpf_cnpj, comprador_telefone,
                     comprador_email, comprador_endereco, obs
                 ))
-                venda_id = c.lastrowid
+                venda_id = c.fetchone()["id"]
 
                 valor_parcela = valor_final / parcelas if parcelas else valor_final
                 data_base = data_venda
@@ -5333,6 +5515,7 @@ elif op == "Vendas de Animais":
                     c.execute("UPDATE animais SET status = %s WHERE nome = %s", ("Vendido", animal_nome))
 
                 conn.commit()
+                registrar_auditoria("Vendas", "Cadastro", f"Venda de '{animal_nome}' para '{comprador_nome}' - {moeda(valor_final)} ({parcelas}x)")
                 st.success("Venda salva e parcelas geradas com sucesso!")
 
     elif aba == "Recebimentos":
@@ -5360,6 +5543,7 @@ elif op == "Vendas de Animais":
                     WHERE id = %s
                 """, ("Pago", br_data(data_pagamento), obs, parcela_id))
                 conn.commit()
+                registrar_auditoria("Vendas", "Recebimento", f"Parcela id {parcela_id} marcada como paga em {br_data(data_pagamento)}")
                 st.success("Parcela marcada como paga.")
         else:
             st.warning("Nenhum recebimento cadastrado.")
@@ -5613,6 +5797,7 @@ elif op == "Funcionários":
                     if confirmar:
                         c.execute("DELETE FROM funcionarios WHERE id = %s", (funcionario_id,))
                         conn.commit()
+                        registrar_auditoria("Funcionários", "Exclusão", f"Funcionário '{nome}' (id {funcionario_id}) excluído")
                         st.success("Funcionário excluído com sucesso!")
                         st.rerun()
                     else:
@@ -5629,7 +5814,7 @@ elif op == "Alertas WhatsApp":
 
     funcionarios = pd.read_sql_query(
         "SELECT * FROM funcionarios WHERE nome IS NOT NULL AND nome != '' AND status = 'Ativo'",
-        conn
+        get_engine()
     )
 
     if twilio_configurado():
@@ -6222,117 +6407,6 @@ border-left:4px solid #e8b84b;border-radius:0 10px 10px 0;padding:12px 16px;marg
                 )
         else:
             st.info("Nenhuma ação registrada ainda. As ações serão registradas automaticamente a partir de agora.")
-
-
-
-    if aba == "Cadastrar Usuário":
-        st.markdown("### Novo usuário")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            nome_usuario = st.text_input("Nome de login")
-            senha_usuario = st.text_input("Senha", type="password")
-            perfil = st.selectbox("Perfil", list(PERFIS.keys()))
-
-        with col2:
-            ativo = st.selectbox("Ativo", ["Sim", "Não"])
-            st.info("As permissões serão liberadas automaticamente conforme o perfil escolhido.")
-            permissoes = PERFIS[perfil]
-            st.write("Permissões:", ", ".join(permissoes))
-
-        if st.button("Salvar Usuário"):
-            if not nome_usuario or not senha_usuario:
-                st.error("Informe nome e senha.")
-
-            existente = pd.read_sql_query(
-                "SELECT * FROM usuarios WHERE nome = %s", get_engine(),
-                params=(nome_usuario,)
-            )
-
-            if not existente.empty:
-                st.error("Já existe usuário com esse nome.")
-
-            c.execute("""
-                INSERT INTO usuarios (nome, senha_hash, perfil, permissoes, ativo)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (
-                nome_usuario,
-                hash_senha(senha_usuario),
-                perfil,
-                "|".join(PERFIS[perfil]),
-                ativo
-            ))
-            conn.commit()
-            st.success("Usuário cadastrado com sucesso!")
-
-    elif aba == "Usuários Cadastrados":
-        df = pd.read_sql_query("SELECT id, nome, perfil, permissoes, ativo FROM usuarios", get_engine())
-
-        if not df.empty:
-            st.dataframe(df, use_container_width=True)
-
-            st.markdown("### Editar usuário")
-            usuario_id = st.selectbox("ID do usuário", df["id"].astype(str).tolist())
-            usuario = pd.read_sql_query("SELECT * FROM usuarios WHERE id = %s", get_engine(), params=(usuario_id,)).iloc[0]
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                novo_perfil = st.selectbox(
-                    "Perfil",
-                    list(PERFIS.keys()),
-                    index=list(PERFIS.keys()).index(usuario["perfil"])
-                        if usuario["perfil"] in list(PERFIS.keys()) else 0
-                )
-                novo_ativo = st.selectbox(
-                    "Ativo",
-                    ["Sim", "Não"],
-                    index=0 if usuario["ativo"] == "Sim" else 1
-                )
-
-            with col2:
-                permissoes_atuais = str(usuario["permissoes"] or "").split("|")
-                novas_permissoes = st.multiselect(
-                    "Permissões",
-                    TODAS_PERMISSOES,
-                    default=[p for p in permissoes_atuais if p in TODAS_PERMISSOES]
-                )
-
-            if st.button("Atualizar Permissões"):
-                c.execute("""
-                    UPDATE usuarios
-                    SET perfil = %s, permissoes = %s, ativo = %s
-                    WHERE id = %s
-                """, (
-                    novo_perfil,
-                    "|".join(novas_permissoes),
-                    novo_ativo,
-                    usuario_id
-                ))
-                conn.commit()
-                st.success("Usuário atualizado com sucesso!")
-
-        else:
-            st.warning("Nenhum usuário cadastrado.")
-
-    elif aba == "Alterar Senha":
-        df = pd.read_sql_query("SELECT id, nome FROM usuarios", get_engine())
-
-        if not df.empty:
-            usuario_id = st.selectbox("Usuário", df["id"].astype(str).tolist())
-            nova_senha = st.text_input("Nova senha", type="password")
-
-            if st.button("Alterar Senha"):
-                if not nova_senha:
-                    st.error("Informe a nova senha.")
-
-                c.execute(
-                    "UPDATE usuarios SET senha_hash = %s WHERE id = %s",
-                    (hash_senha(nova_senha), usuario_id)
-                )
-                conn.commit()
-                st.success("Senha alterada com sucesso!")
 
 
 # =========================================================
