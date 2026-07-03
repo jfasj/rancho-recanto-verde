@@ -13,6 +13,7 @@ except ImportError:
 try:
     import psycopg2
     import psycopg2.extras
+    import psycopg2.pool
     from sqlalchemy import create_engine
     _PG_OK = True
 except ImportError:
@@ -177,41 +178,130 @@ def get_secret_value_early(nome, padrao=""):
     return os.environ.get(nome, padrao)
 
 
-def get_connection():
+@st.cache_resource
+def get_pool():
     """
-    Retorna a conexão dedicada da sessão atual (uma conexão direta por sessão,
-    não uma única conexão global compartilhada por todos os usuários).
+    Pool de conexões de escrita, usado sob demanda por ConexaoGerenciada:
+    cada operação pega uma conexão real do pool, comita (ou reverte) e
+    devolve na hora — nunca segura uma conexão pela duração da sessão do
+    usuário. Isso já foi tentado de duas formas piores:
+      1) uma única conexão global compartilhada por todo mundo (não é
+         seguro para acesso concorrente);
+      2) uma conexão presa por sessão inteira, sem devolução (esgotava o
+         limite de conexões do Supabase rapidamente com poucos usuários).
+    Como aqui o tempo de vida de cada conexão real é de milissegundos
+    (só durante a query), um pool pequeno atende bem vários usuários ao
+    mesmo tempo.
+    """
+    db_url = get_secret_value_early("DATABASE_URL")
+    if not db_url:
+        st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
+        st.stop()
+    try:
+        return psycopg2.pool.ThreadedConnectionPool(
+            1, 5, db_url,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            sslmode="require",
+            connect_timeout=15,
+        )
+    except Exception as e:
+        st.error(f"❌ Erro ao conectar ao banco de dados: {e}")
+        st.info("Verifique a DATABASE_URL nos Secrets do Streamlit Cloud.")
+        st.stop()
 
-    Não usa um pool local de tamanho fixo: um pool com teto artificial (ex.: 8)
-    trava o sistema inteiro quando esgota, e sessões do Streamlit não têm um
-    gancho confiável de "fim de sessão" para devolver a conexão ao pool — na
-    prática as conexões nunca voltavam e o teto era atingido rápido. Deixamos o
-    próprio "session pooler" do Supabase (que já tem limite e expira conexões
-    ociosas sozinho) ser a única barreira real.
-    """
-    conn_atual = st.session_state.get("_db_conn")
-    if conn_atual is None or conn_atual.closed:
-        db_url = get_secret_value_early("DATABASE_URL")
-        if not db_url:
-            st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
-            st.stop()
+
+class _CursorGerenciado:
+    """Cursor que delega para um cursor psycopg2 real, obtido sob demanda."""
+
+    def __init__(self, conexao_gerenciada):
+        self._pai = conexao_gerenciada
+        self._cursor_real = None
+
+    def execute(self, *args, **kwargs):
+        conexao_real = self._pai._obter_conexao_real()
+        self._cursor_real = conexao_real.cursor()
         try:
-            conn_atual = psycopg2.connect(
-                db_url,
-                cursor_factory=psycopg2.extras.RealDictCursor,
-                sslmode="require",
-                connect_timeout=15,
-            )
-        except Exception as e:
-            st.error(
-                "❌ O sistema está com muitos acessos simultâneos no momento. "
-                "Aguarde alguns segundos e atualize a página."
-            )
-            st.caption(str(e))
-            st.stop()
-        conn_atual.autocommit = False
-        st.session_state["_db_conn"] = conn_atual
-    return conn_atual
+            return self._cursor_real.execute(*args, **kwargs)
+        except Exception:
+            self._pai._devolver(quebrada=True)
+            raise
+
+    def fetchone(self):
+        return self._cursor_real.fetchone()
+
+    def fetchall(self):
+        return self._cursor_real.fetchall()
+
+    def close(self):
+        if self._cursor_real is not None:
+            try:
+                self._cursor_real.close()
+            except Exception:
+                pass
+
+
+class ConexaoGerenciada:
+    """
+    Substitui uma conexão psycopg2 direta por um proxy com a mesma interface
+    (.cursor(), .commit(), .rollback(), .close()) usada em todo o resto do
+    código, mas que só pega uma conexão real do pool quando uma query é de
+    fato executada, devolvendo-a assim que commit()/rollback() é chamado.
+    """
+
+    def __init__(self, pool):
+        self._pool = pool
+        self._conn_real = None
+
+    def _obter_conexao_real(self):
+        if self._conn_real is None:
+            self._conn_real = self._pool.getconn()
+            self._conn_real.autocommit = False
+        return self._conn_real
+
+    def _devolver(self, quebrada=False):
+        if self._conn_real is not None:
+            try:
+                self._pool.putconn(self._conn_real, close=quebrada)
+            except Exception:
+                pass
+            self._conn_real = None
+
+    def cursor(self):
+        return _CursorGerenciado(self)
+
+    def commit(self):
+        if self._conn_real is not None:
+            try:
+                self._conn_real.commit()
+            finally:
+                self._devolver()
+
+    def rollback(self):
+        if self._conn_real is not None:
+            try:
+                self._conn_real.rollback()
+            except Exception:
+                pass
+            finally:
+                self._devolver()
+
+    def close(self):
+        self._devolver()
+
+    @property
+    def closed(self):
+        return False
+
+    def __del__(self):
+        # Rede de segurança: se por algum motivo uma conexão real ficou presa
+        # (ex.: exceção entre o execute() e o commit()/rollback()), devolve
+        # ao pool quando este proxy for descartado, em vez de vazar.
+        self._devolver()
+
+
+def get_connection():
+    """Retorna o proxy de conexão desta execução do script (ver ConexaoGerenciada)."""
+    return ConexaoGerenciada(get_pool())
 
 
 @st.cache_resource
@@ -232,24 +322,19 @@ def get_engine():
 
 
 def reconectar_se_necessario():
-    """Reconecta ao banco se a conexão cair ou tiver transação com falha."""
+    """
+    Mantido por compatibilidade com o único ponto que ainda chama esta função.
+    Com ConexaoGerenciada não há mais uma conexão persistente para "cair" —
+    cada operação já pega uma conexão nova do pool sob demanda — então isso
+    só garante que nenhuma transação ficou pendurada antes de prosseguir.
+    """
     global conn, c
     try:
-        # Testa se a conexão está OK
-        conn.cursor().execute("SELECT 1")
-        conn.rollback()  # Limpa qualquer transação pendente com falha
+        conn.rollback()
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        try:
-            conn.close()
-        except Exception:
-            pass
-        st.session_state.pop("_db_conn", None)
-        conn = get_connection()
-        c = conn.cursor()
+        pass
+    conn = get_connection()
+    c = conn.cursor()
 
 
 conn = get_connection()
