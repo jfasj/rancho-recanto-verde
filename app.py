@@ -23,6 +23,13 @@ try:
     from twilio.rest import Client
 except Exception:
     Client = None
+
+try:
+    import zxingcpp
+    from PIL import Image as _PILImage
+    _BARCODE_OK = True
+except ImportError:
+    _BARCODE_OK = False
 from datetime import datetime, date, timedelta
 from urllib.parse import quote
 from io import BytesIO
@@ -371,7 +378,7 @@ _SCHEMA = {
         "preco", "validade", "fornecedor", "obs",
         "quantidade_compra", "unidade_compra", "volume_por_unidade",
         "unidade_controle", "estoque_convertido", "estoque_min_controle",
-        "preco_por_controle",
+        "preco_por_controle", "codigo_barras",
     ],
     "sanitario": [
         "animal", "tipo", "procedimento", "produto", "data_aplicacao",
@@ -1752,6 +1759,29 @@ if _AUTOREFRESH_OK and _refresh_count > 0:
     _enviados_auto = verificar_e_disparar_alertas_auto()
     if _enviados_auto > 0:
         st.toast(f"✅ {_enviados_auto} alerta(s) WhatsApp enviado(s) automaticamente!", icon="📲")
+
+
+# =========================================================
+# LEITURA DE CÓDIGO DE BARRAS (câmera)
+# =========================================================
+
+def ler_codigo_de_barras(imagem_bytes):
+    """
+    Decodifica o primeiro código de barras encontrado numa foto (bytes de
+    imagem, ex.: vindos de st.camera_input). Retorna (codigo, formato) ou
+    (None, None) se nada for reconhecido ou a biblioteca não estiver
+    disponível.
+    """
+    if not _BARCODE_OK:
+        return None, None
+    try:
+        imagem = _PILImage.open(BytesIO(imagem_bytes)).convert("RGB")
+        resultados = zxingcpp.read_barcodes(imagem)
+        if resultados:
+            return resultados[0].text, str(resultados[0].format)
+    except Exception:
+        pass
+    return None, None
 
 
 # =========================================================
@@ -4662,12 +4692,30 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
 </div>
 """, unsafe_allow_html=True)
 
+        if _BARCODE_OK:
+            with st.expander("📷 Ler código de barras pela câmera", expanded=False):
+                foto_codigo = st.camera_input("Aponte para o código de barras da embalagem", key="cam_cadastro_farmacia")
+                if foto_codigo is not None:
+                    codigo_lido, formato_lido = ler_codigo_de_barras(foto_codigo.getvalue())
+                    if codigo_lido:
+                        st.session_state["codigo_barras_lido"] = codigo_lido
+                        st.success(f"✅ Código lido ({formato_lido}): {codigo_lido}")
+                    else:
+                        st.warning("Não consegui ler nenhum código nessa foto. Tente aproximar mais ou melhorar a iluminação.")
+        else:
+            st.caption("Leitura de código de barras indisponível neste ambiente (biblioteca não instalada).")
+
         col1, col2 = st.columns(2)
 
         with col1:
             principio_ativo = st.text_input("Princípio Ativo *", placeholder="Ex: Ivermectina 1%, Penicilina G, Flunixin Meglumine")
             nome_comercial  = st.text_input("Nome Comercial / Marca", placeholder="Ex: IVOMEC, BANAMINE, PENTABIÓTICO")
             medicamento     = nome_comercial if nome_comercial else principio_ativo
+            codigo_barras   = st.text_input(
+                "Código de barras",
+                value=st.session_state.get("codigo_barras_lido", ""),
+                placeholder="Escaneie acima ou digite manualmente"
+            )
 
             # Sugestão automática: verifica se já existe produto com mesmo princípio ativo
             if principio_ativo:
@@ -4719,19 +4767,20 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                  quantidade, unidade, validade, fornecedor,
                  obs, estoque_min, preco, quantidade_compra, unidade_compra,
                  volume_por_unidade, unidade_controle, estoque_convertido,
-                 estoque_min_controle, preco_por_controle)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 estoque_min_controle, preco_por_controle, codigo_barras)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 medicamento or principio_ativo, nome_comercial, principio_ativo,
                 categoria, str(quantidade_compra), unidade_compra, br_data(validade),
                 fornecedor, obs, str(estoque_min_controle), str(preco_total),
                 str(quantidade_compra), unidade_compra, str(volume_por_unidade),
                 unidade_controle, str(estoque_convertido), str(estoque_min_controle),
-                str(preco_por_controle)
+                str(preco_por_controle), codigo_barras
             ))
             conn.commit()
             listar_farmacia.clear()
             _carregar_dashboard.clear()
+            st.session_state.pop("codigo_barras_lido", None)
             st.success("Medicamento cadastrado com estoque convertido!")
 
     elif aba == "Estoque":
@@ -4797,10 +4846,28 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
 
             else:
                 st.markdown("### Consulta do estoque")
+
+                codigo_escaneado = None
+                if _BARCODE_OK:
+                    with st.expander("📷 Escanear código de barras para buscar", expanded=False):
+                        foto_busca = st.camera_input("Aponte para o código de barras", key="cam_busca_farmacia")
+                        if foto_busca is not None:
+                            codigo_escaneado, formato_lido = ler_codigo_de_barras(foto_busca.getvalue())
+                            if codigo_escaneado:
+                                st.success(f"✅ Código lido ({formato_lido}): {codigo_escaneado}")
+                            else:
+                                st.warning("Não consegui ler nenhum código nessa foto.")
+
                 busca = st.text_input("Buscar medicamento ou princípio ativo")
                 df_view = df.copy()
 
-                if busca:
+                if codigo_escaneado and "codigo_barras" in df_view.columns:
+                    encontrado = df_view[df_view["codigo_barras"] == codigo_escaneado]
+                    if encontrado.empty:
+                        st.warning(f"Nenhum medicamento cadastrado com o código de barras {codigo_escaneado}.")
+                    else:
+                        df_view = encontrado
+                elif busca:
                     mask = (
                         df_view["medicamento"].str.contains(busca, case=False, na=False) |
                         df_view.get("principio_ativo", pd.Series(dtype=str)).str.contains(busca, case=False, na=False) |
@@ -4894,6 +4961,17 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                 validade = st.text_input("Validade", value=str(med.get("validade", "") or ""))
                 fornecedor = st.text_input("Fornecedor", value=str(med.get("fornecedor", "") or ""))
                 obs = st.text_area("Observações", value=str(med.get("obs", "") or ""))
+                codigo_barras = st.text_input("Código de barras", value=str(med.get("codigo_barras", "") or ""))
+
+            if _BARCODE_OK:
+                with st.expander("📷 Ler código de barras pela câmera", expanded=False):
+                    foto_alterar = st.camera_input("Aponte para o código de barras", key="cam_alterar_farmacia")
+                    if foto_alterar is not None:
+                        codigo_lido, formato_lido = ler_codigo_de_barras(foto_alterar.getvalue())
+                        if codigo_lido:
+                            st.success(f"✅ Código lido ({formato_lido}): {codigo_lido} — cole no campo acima e salve.")
+                        else:
+                            st.warning("Não consegui ler nenhum código nessa foto.")
 
             colb1, colb2 = st.columns(2)
             with colb1:
@@ -4905,7 +4983,7 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                             preco = %s, quantidade_compra = %s, unidade_compra = %s,
                             volume_por_unidade = %s, unidade_controle = %s,
                             estoque_convertido = %s, estoque_min_controle = %s,
-                            preco_por_controle = %s
+                            preco_por_controle = %s, codigo_barras = %s
                         WHERE id = %s
                     """, (
                         medicamento, categoria, str(quantidade_compra), unidade_compra,
@@ -4913,7 +4991,7 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                         str(preco_total), str(quantidade_compra), unidade_compra,
                         str(volume_por_unidade), unidade_controle,
                         str(estoque_convertido), str(estoque_min_controle),
-                        str(preco_por_controle), str(med_id)
+                        str(preco_por_controle), codigo_barras, str(med_id)
                     ))
                     conn.commit()
                     listar_farmacia.clear()
