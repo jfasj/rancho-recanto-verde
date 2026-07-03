@@ -28,6 +28,7 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 try:
     from streamlit_autorefresh import st_autorefresh
     _AUTOREFRESH_OK = True
@@ -96,10 +97,66 @@ def _pdf_str(texto):
 
 st.set_page_config(
     page_title="Rancho Recanto Verde",
-    page_icon="https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png",
+    page_icon="static/icon-192.png" if os.path.exists("static/icon-192.png") else "https://raw.githubusercontent.com/jfasj/rancho-recanto-verde/main/logo.png",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ── PWA: permite "Adicionar à tela inicial" no celular (ícone + tela cheia) ──
+# Streamlit não expõe o <head> diretamente, então injeta via JS. Precisa
+# rodar dentro de um iframe de verdade — um <script> dentro de st.markdown
+# não executa, pois o navegador ignora scripts inseridos via innerHTML.
+# Idempotente (verifica se já existe antes de adicionar) para não duplicar
+# a cada rerun. st.iframe é a API atual; components.html é o fallback para
+# versões mais antigas do Streamlit.
+_pwa_injecao_html = """
+<script>
+(function () {
+    if (window.parent.document.getElementById('pwa-manifest-link')) { return; }
+    const head = window.parent.document.head;
+    const document = window.parent.document;
+
+    const manifest = document.createElement('link');
+    manifest.id = 'pwa-manifest-link';
+    manifest.rel = 'manifest';
+    manifest.href = './app/static/manifest.json';
+    head.appendChild(manifest);
+
+    const themeColor = document.createElement('meta');
+    themeColor.name = 'theme-color';
+    themeColor.content = '#1a3a2a';
+    head.appendChild(themeColor);
+
+    const appleIcon = document.createElement('link');
+    appleIcon.rel = 'apple-touch-icon';
+    appleIcon.href = './app/static/apple-touch-icon.png';
+    head.appendChild(appleIcon);
+
+    const appleCapable = document.createElement('meta');
+    appleCapable.name = 'apple-mobile-web-app-capable';
+    appleCapable.content = 'yes';
+    head.appendChild(appleCapable);
+
+    const appleTitle = document.createElement('meta');
+    appleTitle.name = 'apple-mobile-web-app-title';
+    appleTitle.content = 'Recanto Verde';
+    head.appendChild(appleTitle);
+
+    const appleStatusBar = document.createElement('meta');
+    appleStatusBar.name = 'apple-mobile-web-app-status-bar-style';
+    appleStatusBar.content = 'black-translucent';
+    head.appendChild(appleStatusBar);
+
+    if ('serviceWorker' in window.parent.navigator) {
+        window.parent.navigator.serviceWorker.register('./app/static/sw.js').catch(function () {});
+    }
+})();
+</script>
+"""
+if hasattr(st, "iframe"):
+    st.iframe(_pwa_injecao_html, height=1, width="content")
+else:
+    components.html(_pwa_injecao_html, height=0, width=0)
 
 LOGO = "logo.png"
 
