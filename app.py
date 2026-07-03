@@ -13,7 +13,6 @@ except ImportError:
 try:
     import psycopg2
     import psycopg2.extras
-    import psycopg2.pool
     from sqlalchemy import create_engine
     _PG_OK = True
 except ImportError:
@@ -121,46 +120,37 @@ def get_secret_value_early(nome, padrao=""):
     return os.environ.get(nome, padrao)
 
 
-@st.cache_resource
-def get_pool():
-    """
-    Pool de conexões compartilhado entre sessões (thread-safe), via SESSION POOLER
-    do Supabase (compatível com IPv4/Streamlit Cloud). Cada sessão de usuário pega
-    sua própria conexão do pool — evita que todos os usuários dividam a mesma
-    conexão/cursor psycopg2, o que não é seguro para acesso concorrente.
-    """
-    db_url = get_secret_value_early("DATABASE_URL")
-    if not db_url:
-        st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
-        st.stop()
-    try:
-        # Tetos conservadores: o "session pooler" do Supabase (plano free) limita
-        # a ~15 conexões simultâneas no total, e o engine SQLAlchemy abaixo (usado
-        # em todas as leituras) também consome parte desse teto. 8 conexões de
-        # escrita + até 5 de leitura deixa margem confortável.
-        return psycopg2.pool.ThreadedConnectionPool(
-            1, 8, db_url,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-            sslmode="require",
-            connect_timeout=15,
-        )
-    except Exception as e:
-        st.error(f"❌ Erro ao conectar ao banco de dados: {e}")
-        st.info("Verifique a DATABASE_URL nos Secrets do Streamlit Cloud.")
-        st.stop()
-
-
 def get_connection():
-    """Retorna a conexão dedicada da sessão atual (obtida do pool compartilhado)."""
+    """
+    Retorna a conexão dedicada da sessão atual (uma conexão direta por sessão,
+    não uma única conexão global compartilhada por todos os usuários).
+
+    Não usa um pool local de tamanho fixo: um pool com teto artificial (ex.: 8)
+    trava o sistema inteiro quando esgota, e sessões do Streamlit não têm um
+    gancho confiável de "fim de sessão" para devolver a conexão ao pool — na
+    prática as conexões nunca voltavam e o teto era atingido rápido. Deixamos o
+    próprio "session pooler" do Supabase (que já tem limite e expira conexões
+    ociosas sozinho) ser a única barreira real.
+    """
     conn_atual = st.session_state.get("_db_conn")
     if conn_atual is None or conn_atual.closed:
+        db_url = get_secret_value_early("DATABASE_URL")
+        if not db_url:
+            st.error("❌ DATABASE_URL não configurada nos Secrets do Streamlit.")
+            st.stop()
         try:
-            conn_atual = get_pool().getconn()
-        except psycopg2.pool.PoolError:
+            conn_atual = psycopg2.connect(
+                db_url,
+                cursor_factory=psycopg2.extras.RealDictCursor,
+                sslmode="require",
+                connect_timeout=15,
+            )
+        except Exception as e:
             st.error(
                 "❌ O sistema está com muitos acessos simultâneos no momento. "
                 "Aguarde alguns segundos e atualize a página."
             )
+            st.caption(str(e))
             st.stop()
         conn_atual.autocommit = False
         st.session_state["_db_conn"] = conn_atual
@@ -197,7 +187,7 @@ def reconectar_se_necessario():
         except Exception:
             pass
         try:
-            get_pool().putconn(conn, close=True)
+            conn.close()
         except Exception:
             pass
         st.session_state.pop("_db_conn", None)
