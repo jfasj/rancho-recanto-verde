@@ -1,0 +1,38 @@
+name: Backup diário do banco
+
+on:
+  schedule:
+    # Todo dia às 06:00 UTC (03:00 no horário de Brasília)
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}  # permite rodar manualmente pela aba "Actions" no GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências
+        run: pip install psycopg2-binary pandas
+
+      - name: Rodar o backup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/backup_diario.py
+
+      - name: Salvar os arquivos de backup no repositório
+        run: |
+          git config user.name "backup-automatico"
+          git config user.email "actions@github.com"
+          git add backups/
+          git diff --staged --quiet && echo "Nada novo para salvar" || git commit -m "Backup automático $(date +%Y-%m-%d)"
+          git push
