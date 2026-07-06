@@ -1482,8 +1482,14 @@ padding-left:4px'>🔒 Acesso ao Sistema</div>
                         )
                         conn.commit()
                         carregar_usuario.clear()
+                        if bloqueado_ate_novo:
+                            registrar_auditoria("Login", "Bloqueio", f"Usuário '{usuario['nome']}' bloqueado por {LOGIN_BLOQUEIO_MINUTOS} min após {tentativas} tentativas falhas")
+                        else:
+                            registrar_auditoria("Login", "Falha", f"Tentativa de login falhou para o usuário '{usuario['nome']}'")
                     except Exception:
                         conn.rollback()
+                else:
+                    registrar_auditoria("Login", "Falha", f"Tentativa de login com usuário inexistente: '{nome_login}'")
                 st.error("Usuário ou senha inválidos.")
 
         with st.expander("🔑 Esqueci minha senha"):
@@ -1966,6 +1972,8 @@ def recalcular_farmacia_por_descricao(somente_volume_igual_1=True):
         alterados += 1
 
     conn.commit()
+    if alterados:
+        registrar_auditoria("Farmácia", "Recalculo em massa", f"{alterados} medicamento(s) tiveram volume/estoque recalculados pela descrição")
     return alterados
 
 
@@ -2438,6 +2446,7 @@ align-items:center;justify-content:space-between;gap:12px">
                     ""
                 ))
                 conn.commit()
+                registrar_auditoria("Agenda", "Cadastro", f"Evento '{titulo_ev}' criado para {br_data(data_ev)}")
                 _carregar_agenda.clear()
                 st.success(f"✅ Evento '{titulo_ev}' salvo para {br_data(data_ev)}!")
                 st.session_state.agenda_ano = data_ev.year
@@ -2506,6 +2515,7 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
                         if st.button("✅", key=f"conc_{ev_id}", help="Marcar como concluído"):
                             c.execute("UPDATE agenda SET status = %s WHERE id = %s", ("Concluído", ev_id))
                             conn.commit()
+                            registrar_auditoria("Agenda", "Conclusão", f"Evento '{ev.get('titulo','')}' (id {ev_id}) marcado como concluído")
                             _carregar_agenda.clear()
                             st.rerun()
 
@@ -2567,6 +2577,8 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin-bottom:4px">
                     except Exception:
                         continue
                 conn.commit()
+                if importados:
+                    registrar_auditoria("Agenda", "Sincronização", f"{importados} medicação(ões) importada(s) da Farmácia para a Agenda")
                 _carregar_agenda.clear()
                 st.success(f"✅ {importados} medicação(ões) importada(s) para a Agenda!")
             except Exception as e:
@@ -2808,6 +2820,7 @@ border-left:4px solid #e05a5a;border-radius:10px;padding:14px 18px;margin-bottom
                             (animal_d, produto_d, str(qtd_d), turno_d, "Sim", obs_d)
                         )
                     conn.commit()
+                    registrar_auditoria("Ração", "Cadastro de dieta", f"Dieta de '{animal_d}' salva: {qtd_d}kg de {produto_d} no {turno_d}")
                     _carregar_dieta.clear()
                     st.success(f"✅ Dieta de {animal_d} salva: {qtd_d}kg de {produto_d} no {turno_d}!")
                     st.rerun()
@@ -2833,6 +2846,7 @@ border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px'>
                         if st.button("❌ Desativar todas", key=f"desativ_{animal_nome}"):
                             c.execute("UPDATE racao_dieta SET ativo = 'Não' WHERE animal = %s", (animal_nome,))
                             conn.commit()
+                            registrar_auditoria("Ração", "Desativação de dieta", f"Todas as dietas de '{animal_nome}' foram desativadas")
                             _carregar_dieta.clear()
                             st.rerun()
             else:
@@ -2934,6 +2948,7 @@ border-radius:0 10px 10px 0;padding:12px 16px;margin-bottom:8px'>
                         """, (nome_an, prod, str(qtd), turno_forn, br_data(data_forn), responsavel_forn, ""))
 
                     conn.commit()
+                    registrar_auditoria("Ração", "Fornecimento", f"{len(fornecimentos)} fornecimento(s) registrado(s) no turno {turno_forn} de {br_data(data_forn)}")
                     _carregar_estoque_racao.clear()
                     _carregar_fornecimento.clear()
                     st.session_state.pop("prefill_forn", None)
@@ -3277,6 +3292,7 @@ elif op == "Cadastrar Animal":
             obs
         ))
         conn.commit()
+        registrar_auditoria("Animais", "Cadastro", f"Animal '{nome}' cadastrado")
         listar_animais.clear()
         _carregar_dashboard.clear()
         st.success("Animal cadastrado com sucesso!")
@@ -3461,6 +3477,7 @@ elif op == "Pesagem / Evolução":
                     VALUES (%s, %s, %s, %s, %s)
                 """, (animal_nome, animal_tipo, br_data(data_pesagem), str(peso), obs))
                 conn.commit()
+                registrar_auditoria("Pesagem", "Cadastro", f"Pesagem de '{animal_nome}' registrada: {peso}kg em {br_data(data_pesagem)}")
                 st.success("Pesagem registrada com sucesso!")
 
     elif aba == "Histórico de Pesagens":
@@ -3574,6 +3591,7 @@ elif op == "Controle Sanitário":
                         responsavel, obs, "Agendado"
                     ))
                     conn.commit()
+                    registrar_auditoria("Sanitário", "Cadastro", f"{procedimento} '{produto}' agendado para '{animal_nome}' em {br_data(data_aplicacao)}")
                     st.success(f"✅ {procedimento} registrado! Estoque será baixado quando confirmar a aplicação.")
 
     elif aba == "✅ Confirmar Aplicação":
@@ -3658,6 +3676,7 @@ padding:12px 16px;margin-bottom:8px'>
                             UPDATE sanitario SET status_aplicacao = %s WHERE id = %s
                         """, ("Cancelado", rid))
                         conn.commit()
+                        registrar_auditoria("Sanitário", "Cancelamento", f"Aplicação cancelada: {row.get('produto','')} em {row.get('animal','')} (id {rid})")
                         st.rerun()
 
     elif aba == "Alertas Sanitários":
@@ -3800,6 +3819,7 @@ elif op == "Consulta ABQM":
                     datetime.now().strftime("%d/%m/%Y %H:%M")
                 ))
                 conn.commit()
+                registrar_auditoria("ABQM", "Cadastro", f"Dados ABQM de '{animal_nome}' atualizados")
                 listar_animais.clear()
                 st.success("✅ Dados ABQM salvos com sucesso!")
 
@@ -4112,6 +4132,7 @@ letter-spacing:0.12em;margin-bottom:10px">O que deseja fazer com esses dados?</d
                         datetime.now().strftime("%d/%m/%Y %H:%M")
                     ))
                     conn.commit()
+                    registrar_auditoria("ABQM", "Cadastro via IA", f"Dados ABQM salvos em '{st.session_state.get('abqm_ia_animal')}' via importação PDF/Texto")
                     listar_animais.clear()
                     del st.session_state["abqm_ia_dados"]
                     st.success(f"✅ Dados ABQM salvos em '{st.session_state.get('abqm_ia_animal')}'!")
@@ -4205,6 +4226,7 @@ padding:16px;margin-top:12px">
                                     datetime.now().strftime("%d/%m/%Y %H:%M")
                                 ))
                                 conn.commit()
+                                registrar_auditoria("Animais", "Cadastro via ABQM", f"Animal '{na_nome}' cadastrado com dados ABQM e genealogia via importação")
                                 listar_animais.clear()
                                 _carregar_dashboard.clear()
                                 del st.session_state["abqm_ia_dados"]
@@ -4681,6 +4703,7 @@ padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap'>
                         partes.append(f"💊 Farmácia: {importados_farm} novos, {atualizados_farm} atualizados")
                     if importados_rac or atualizados_rac:
                         partes.append(f"🌾 Ração: {importados_rac} novos, {atualizados_rac} atualizados")
+                    registrar_auditoria("Compras", "Importação NF-e", "Importação concluída: " + " | ".join(partes) if partes else "Importação de NF-e concluída sem novos itens")
                     st.success("✅ Importação concluída! " + " | ".join(partes))
 
         except Exception as e:
@@ -4833,6 +4856,7 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                 str(preco_por_controle), codigo_barras
             ))
             conn.commit()
+            registrar_auditoria("Farmácia", "Cadastro", f"Medicamento '{medicamento or principio_ativo}' cadastrado")
             listar_farmacia.clear()
             _carregar_dashboard.clear()
             st.session_state.pop("codigo_barras_lido", None)
@@ -5049,6 +5073,7 @@ Ex: "Ivermectina 1%" pode ser vendida como "IVOMEC", "IVERQUANTEL" ou "BIOMEC" �
                         str(preco_por_controle), codigo_barras, str(med_id)
                     ))
                     conn.commit()
+                    registrar_auditoria("Farmácia", "Alteração", f"Medicamento '{medicamento}' (id {med_id}) alterado")
                     listar_farmacia.clear()
                     _carregar_dashboard.clear()
                     st.success("Medicamento alterado com sucesso!")
@@ -5396,6 +5421,7 @@ elif op == "Veterinário / Tratamentos":
                             ))
 
                         conn.commit()
+                        registrar_auditoria("Veterinário", "Cadastro de ficha médica", f"Ficha médica nº {ficha_id} de '{animal_nome}' salva com {len(st.session_state.medicacoes_ficha_temp)} medicação(ões)")
                         st.session_state.medicacoes_ficha_temp = []
                         st.success(f"Ficha médica nº {ficha_id} salva com sucesso, estoque baixado e alertas agendados.")
                         st.rerun()
@@ -5515,6 +5541,7 @@ padding:12px 16px;margin-bottom:8px'>
                     if st.button("❌ Cancelar", key=f"canc_vet_{rid}", use_container_width=True):
                         c.execute("UPDATE ficha_medicacoes SET status = %s WHERE id = %s", ("Cancelada", rid))
                         conn.commit()
+                        registrar_auditoria("Veterinário", "Cancelamento", f"Medicação (id {rid}) cancelada")
                         st.rerun()
 
     elif aba == "Medicações Agendadas":
@@ -5554,6 +5581,7 @@ padding:12px 16px;margin-bottom:8px'>
                             WHERE animal = %s AND medicamento = %s AND data_hora = %s
                         """, ("Aplicada", med["animal"], med["medicamento"], med["data_hora"]))
                         conn.commit()
+                        registrar_auditoria("Veterinário", "Confirmação de aplicação", f"Medicação '{med['medicamento']}' em '{med['animal']}' marcada como aplicada (id {med_id})")
                         st.success("Medicação marcada como aplicada.")
                         st.rerun()
 
@@ -5566,6 +5594,7 @@ padding:12px 16px;margin-bottom:8px'>
                             WHERE animal = %s AND medicamento = %s AND data_hora = %s
                         """, ("Cancelada", med["animal"], med["medicamento"], med["data_hora"]))
                         conn.commit()
+                        registrar_auditoria("Veterinário", "Cancelamento", f"Medicação '{med['medicamento']}' em '{med['animal']}' cancelada (id {med_id})")
                         st.success("Medicação cancelada.")
                         st.rerun()
 
@@ -5619,6 +5648,7 @@ elif op == "Reprodução / Embriões":
                     resultado_lavagem, str(embrioes_coletados), status, obs
                 ))
                 conn.commit()
+                registrar_auditoria("Reprodução", "Cadastro de doadora", f"Controle de inseminação de '{egua}' salvo (status: {status})")
                 st.success("Controle da doadora salvo com sucesso!")
 
     elif aba == "Receptoras":
@@ -5660,6 +5690,7 @@ elif op == "Reprodução / Embriões":
                     br_data(confirmacao_prenhez), status, obs
                 ))
                 conn.commit()
+                registrar_auditoria("Reprodução", "Cadastro de receptora", f"Controle de transferência de '{receptora}' salvo (status: {status})")
                 st.success("Controle da receptora salvo com sucesso!")
 
     elif aba == "Alertas Reprodutivos":
@@ -5950,6 +5981,7 @@ elif op == "Funcionários":
                 str(salario), br_data(data_admissao), status, documentos, obs
             ))
             conn.commit()
+            registrar_auditoria("Funcionários", "Cadastro", f"Funcionário '{nome}' cadastrado ({cargo})")
             st.success("Funcionário cadastrado com sucesso!")
 
     elif aba == "Funcionários Cadastrados":
@@ -6053,6 +6085,7 @@ elif op == "Funcionários":
                         funcionario_id
                     ))
                     conn.commit()
+                    registrar_auditoria("Funcionários", "Alteração", f"Funcionário '{nome}' (id {funcionario_id}) alterado")
                     st.success("Funcionário alterado com sucesso!")
                     st.rerun()
 
@@ -6265,6 +6298,7 @@ jobs:
                     "Agendada", "Não", "", "", "", obs
                 ))
                 conn.commit()
+                registrar_auditoria("Veterinário", "Agendamento de medicação", f"Medicação '{medicamento}' agendada para '{animal_nome}' em {data_hora.strftime('%d/%m/%Y %H:%M')}")
                 st.success("Medicação agendada com sucesso!")
 
     elif aba == "Alertas de Medicação 1h Antes":
@@ -6336,6 +6370,7 @@ jobs:
                         if st.button("Marcar medicação como aplicada", key=f"aplicada_{row['id']}", use_container_width=True):
                             c.execute("UPDATE medicacoes_agendadas SET status = %s WHERE id = %s", ("Aplicada", str(row["id"])))
                             conn.commit()
+                            registrar_auditoria("Veterinário", "Confirmação de aplicação", f"Medicação '{row['medicamento']}' em '{row['animal']}' marcada como aplicada (id {row['id']})")
                             st.success("Medicação marcada como aplicada.")
                             st.rerun()
 
