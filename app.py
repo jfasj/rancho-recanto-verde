@@ -1483,6 +1483,58 @@ padding-left:4px'>🔒 Acesso ao Sistema</div>
                         conn.rollback()
                 st.error("Usuário ou senha inválidos.")
 
+        with st.expander("🔑 Esqueci minha senha"):
+            st.caption(
+                "Uso emergencial — pede o código de recuperação configurado pelo "
+                "responsável técnico do sistema (Secrets do Streamlit)."
+            )
+            with st.form("form_recuperar_senha", clear_on_submit=True):
+                nome_recuperar = st.text_input("Usuário", key="rec_nome")
+                codigo_recuperar = st.text_input("Código de recuperação", type="password", key="rec_codigo")
+                nova_senha_recuperar = st.text_input("Nova senha", type="password", key="rec_nova")
+                confirmar_nova_senha = st.text_input("Confirmar nova senha", type="password", key="rec_confirma")
+                recuperar = st.form_submit_button("Redefinir senha", use_container_width=True)
+
+            if recuperar:
+                tentativas_recuperacao = st.session_state.get("tentativas_recuperacao", 0)
+                if tentativas_recuperacao >= 5:
+                    st.error("🔒 Muitas tentativas erradas nesta sessão. Atualize a página para tentar novamente.")
+                else:
+                    codigo_correto = get_secret_value_early("RECUPERACAO_SENHA_CODIGO", "")
+                    if not codigo_correto:
+                        st.error(
+                            "Recuperação de senha não configurada neste sistema. Peça para o "
+                            "responsável técnico configurar o secret RECUPERACAO_SENHA_CODIGO."
+                        )
+                    elif not hmac.compare_digest(str(codigo_recuperar), str(codigo_correto)):
+                        st.session_state["tentativas_recuperacao"] = tentativas_recuperacao + 1
+                        st.error("Código de recuperação incorreto.")
+                    elif not nova_senha_recuperar or len(nova_senha_recuperar) < 4:
+                        st.error("Informe uma nova senha com pelo menos 4 caracteres.")
+                    elif nova_senha_recuperar != confirmar_nova_senha:
+                        st.error("As senhas não coincidem.")
+                    else:
+                        usuario_recuperar = carregar_usuario(nome_recuperar)
+                        if not usuario_recuperar:
+                            st.error("Usuário não encontrado ou inativo.")
+                        else:
+                            try:
+                                c.execute(
+                                    "UPDATE usuarios SET senha_hash = %s, tentativas_falhas = %s, bloqueado_ate = %s WHERE nome = %s",
+                                    (hash_senha(nova_senha_recuperar), "0", "", usuario_recuperar["nome"])
+                                )
+                                conn.commit()
+                                carregar_usuario.clear()
+                                st.session_state["tentativas_recuperacao"] = 0
+                                registrar_auditoria(
+                                    "Login", "Recuperação de senha",
+                                    f"Senha de '{usuario_recuperar['nome']}' redefinida via código de recuperação"
+                                )
+                                st.success("✅ Senha redefinida com sucesso! Faça login com a nova senha acima.")
+                            except Exception:
+                                conn.rollback()
+                                st.error("Não foi possível redefinir a senha. Tente novamente.")
+
     st.stop()
 
 
