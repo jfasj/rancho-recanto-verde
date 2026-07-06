@@ -824,10 +824,13 @@ st.markdown("""
     color: var(--gold) !important;
     font-weight: 500 !important;
 }
-/* Esconde APENAS o círculo do radio, não o texto */
+/* Esconde APENAS o círculo do radio, não o texto. Dependendo da versão do
+   Streamlit/tema, o indicador visual é um <svg> OU uma <div> estilizada
+   (primeiro filho do <label>) — cobre os dois casos. */
 [data-testid="stSidebar"] [role="radiogroup"] [data-testid="stWidgetLabel"] { display: none !important; }
 [data-testid="stSidebar"] [role="radiogroup"] svg { display: none !important; }
 [data-testid="stSidebar"] [role="radiogroup"] input[type="radio"] { display: none !important; }
+[data-testid="stSidebar"] [role="radiogroup"] label[data-baseweb="radio"] > div:first-child { display: none !important; }
 
 
 /* ── Tipografia ── */
