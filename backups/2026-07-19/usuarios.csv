@@ -1,0 +1,2 @@
+﻿id,nome,senha_hash,perfil,permissoes,ativo,tentativas_falhas,bloqueado_ate
+1,admin,$2b$12$ZDongWRwd8PtUUKu6A6NLuF3oe092brltCRn5d3pATt7gRt9FLOxq,Administrador,Dashboard|Agenda|Cadastrar Animal|Animais por Tipo|Pesagem / Evolução|Controle Sanitário|Farmácia|Ração|Veterinário / Tratamentos|Reprodução / Embriões|Vendas de Animais|Relatórios / Gráficos|Gerar PDF|Admin / Usuários|Funcionários|Alertas WhatsApp|Importar NF-e / XML|Consulta ABQM,Sim,0,
