@@ -1,0 +1,3 @@
+﻿id,medicamento,categoria,quantidade,estoque_min,unidade,preco,validade,fornecedor,obs,quantidade_compra,unidade_compra,volume_por_unidade,unidade_controle,estoque_convertido,estoque_min_controle,preco_por_controle,nome_comercial,principio_ativo,codigo_barras
+2,VAC FLUVAC INNOVATOR EWT 1DS ZOETIS,Outro,20.0,0,FR,1580.0,,CRUZA INDUSTRIA E COM. PROD. AGROPECUARIOS LTDA-RECIFE,NF-e 446401,20.0,FR,1.0,mL,20.0,0,79.0,,,
+3,VAC FLUVAC INNOVATOR EHV4 1DS ZOETIS,Outro,12.0,0,FR,1104.0,,CRUZA INDUSTRIA E COM. PROD. AGROPECUARIOS LTDA-RECIFE,NF-e 446401,12.0,FR,1.0,mL,12.0,0,92.0,,,
